@@ -44,8 +44,11 @@ dependencies = [
 name = "application"
 version = "0.1.0"
 dependencies = [
+ "analysis",
  "chrono",
  "domain",
+ "serde",
+ "serde_json",
  "thiserror",
  "tokio",
  "tokio-test",
@@ -210,6 +213,7 @@ name = "desktop"
 version = "0.1.0"
 dependencies = [
  "application",
+ "infra-storage",
 ]
 
 [[package]]

@@ -1,3 +1,4 @@
+use analysis::AnalysisError;
 use domain::ErroDominio;
 use thiserror::Error;
 
@@ -7,6 +8,14 @@ pub enum ErroAplicacao {
     /// Erro propagado de uma porta do domínio.
     #[error("erro de domínio: {0}")]
     Dominio(#[from] ErroDominio),
+
+    /// Erro devolvido pelas primitivas estatísticas.
+    #[error("erro de análise: {0}")]
+    Analise(#[from] AnalysisError),
+
+    /// O canal ou o período não tem dados suficientes para um relatório.
+    #[error("dados insuficientes: {0}")]
+    SemDados(String),
 
     /// A coleta foi cancelada pelo utilizador.
     #[error("coleta cancelada pelo utilizador")]

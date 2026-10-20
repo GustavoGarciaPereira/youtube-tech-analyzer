@@ -10,7 +10,7 @@ use domain::entities::{
 use domain::errors::ErroDominio;
 use domain::ids::{CanalId, ComentarioId, VideoId};
 use domain::ports::RepositorioDeCanais;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::Error;
 use crate::mapeamento::{
@@ -108,6 +108,23 @@ FROM canais
 WHERE id = ?1
 "#;
 
+const SELECT_CANAIS: &str = r#"
+SELECT id, nome, handle, url, descricao, inscritos, total_videos,
+       topic_categories, criado_em
+FROM canais
+ORDER BY nome ASC, id ASC
+"#;
+
+const SELECT_NICHO_CANAL: &str = r#"
+SELECT c.nicho
+FROM classificacoes_nicho c
+INNER JOIN videos v ON v.id = c.video_id
+WHERE v.canal_id = ?1
+GROUP BY c.nicho
+ORDER BY COUNT(*) DESC, c.nicho ASC
+LIMIT 1
+"#;
+
 const SELECT_VIDEOS_CANAL: &str = r#"
 SELECT id, canal_id, titulo, descricao, url, tags, topic_categories,
        publicado_em, duracao_segundos, visualizacoes, curtidas,
@@ -198,6 +215,28 @@ impl SqliteRepositorio {
             Some(row) => Ok(Some(mapear_canal(row)?)),
             None => Ok(None),
         }
+    }
+
+    fn buscar_canais(&self) -> Result<Vec<Canal>, Error> {
+        let conexao = self.obter_conexao()?;
+        let mut stmt = conexao.prepare(SELECT_CANAIS)?;
+        let mut rows = stmt.query([])?;
+        let mut canais = Vec::new();
+        while let Some(row) = rows.next()? {
+            canais.push(mapear_canal(row)?);
+        }
+        Ok(canais)
+    }
+
+    fn buscar_nicho_do_canal(&self, id: &CanalId) -> Result<Option<Nicho>, Error> {
+        let conexao = self.obter_conexao()?;
+        let mut stmt = conexao.prepare(SELECT_NICHO_CANAL)?;
+        let nicho: Option<String> = stmt
+            .query_row(params![id.as_str()], |row| row.get(0))
+            .optional()?;
+        nicho
+            .map(|valor| Nicho::try_from(valor.as_str()).map_err(Error::from))
+            .transpose()
     }
 
     fn salvar_video(&self, video: &Video) -> Result<(), Error> {
@@ -376,6 +415,14 @@ impl RepositorioDeCanais for SqliteRepositorio {
 
     fn obter_canal(&self, id: &CanalId) -> Result<Option<Canal>, ErroDominio> {
         self.buscar_canal(id).map_err(ErroDominio::from)
+    }
+
+    fn listar_canais(&self) -> Result<Vec<Canal>, ErroDominio> {
+        self.buscar_canais().map_err(ErroDominio::from)
+    }
+
+    fn nicho_do_canal(&self, id: &CanalId) -> Result<Option<Nicho>, ErroDominio> {
+        self.buscar_nicho_do_canal(id).map_err(ErroDominio::from)
     }
 
     fn guardar_video(&self, video: &Video) -> Result<(), ErroDominio> {

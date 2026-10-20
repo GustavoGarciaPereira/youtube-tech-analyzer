@@ -10,7 +10,7 @@ use domain::entities::{
     video::Video,
 };
 use domain::errors::ErroDominio;
-use domain::ids::VideoId;
+use domain::ids::{CanalId, VideoId};
 use domain::ports::{ColetorDeCanal, RepositorioDeCanais};
 use tokio::sync::{Semaphore, mpsc};
 use tokio::task::JoinSet;
@@ -72,6 +72,7 @@ impl ColetarCanalUseCase {
         verificar_cancelamento(&cancelamento)?;
 
         let mut videos = self.coletor.coletar_videos(&canal.id).await?;
+        let agregados_canal = snapshots_agregados_canal(&canal.id, &videos, &hoje)?;
         videos.sort_by(|a, b| {
             b.publicado_em
                 .cmp(&a.publicado_em)
@@ -93,6 +94,7 @@ impl ColetarCanalUseCase {
         self.repositorio.upsert_videos_batch(&videos)?;
         self.repositorio
             .upsert_snapshots_batch(&snapshots_videos(&videos, &hoje)?)?;
+        self.repositorio.upsert_snapshots_batch(&agregados_canal)?;
         verificar_cancelamento(&cancelamento)?;
 
         let mut videos_restantes = Vec::with_capacity(videos.len());
@@ -356,6 +358,40 @@ fn snapshots_canal(canal: &Canal, hoje: &str) -> Result<Vec<Snapshot>, ErroAplic
     ])
 }
 
+fn snapshots_agregados_canal(
+    canal_id: &CanalId,
+    videos: &[Video],
+    hoje: &str,
+) -> Result<Vec<Snapshot>, ErroAplicacao> {
+    let visualizacoes: u64 = videos.iter().map(|video| video.visualizacoes).sum();
+    let curtidas: u64 = videos.iter().map(|video| video.curtidas).sum();
+    let total_comentarios: u64 = videos.iter().map(|video| video.total_comentarios).sum();
+
+    Ok(vec![
+        Snapshot::novo(
+            EntidadeTipo::Canal,
+            canal_id.as_str(),
+            Metrica::Visualizacoes,
+            para_i64(visualizacoes, "visualizacoes")?,
+            hoje,
+        ),
+        Snapshot::novo(
+            EntidadeTipo::Canal,
+            canal_id.as_str(),
+            Metrica::Curtidas,
+            para_i64(curtidas, "curtidas")?,
+            hoje,
+        ),
+        Snapshot::novo(
+            EntidadeTipo::Canal,
+            canal_id.as_str(),
+            Metrica::TotalComentarios,
+            para_i64(total_comentarios, "total_comentarios")?,
+            hoje,
+        ),
+    ])
+}
+
 fn snapshots_videos(videos: &[Video], hoje: &str) -> Result<Vec<Snapshot>, ErroAplicacao> {
     let mut snapshots = Vec::with_capacity(videos.len() * 3);
     for video in videos {
@@ -417,5 +453,47 @@ fn emitir(progresso: &Option<mpsc::Sender<EventoProgresso>>, evento: EventoProgr
         // A UI é um consumidor opcional: canal cheio ou fechado não bloqueia
         // nem falha a coleta.
         let _ = sender.try_send(evento);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::snapshots_agregados_canal;
+    use domain::entities::{snapshot::Metrica, video::Video};
+    use domain::ids::{CanalId, VideoId};
+
+    fn video(id: &str, visualizacoes: u64, curtidas: u64, total_comentarios: u64) -> Video {
+        Video {
+            id: VideoId::new(id),
+            canal_id: CanalId::new("canal-1"),
+            titulo: format!("Vídeo {id}"),
+            descricao: None,
+            url: format!("https://www.youtube.com/watch?v={id}"),
+            tags: Vec::new(),
+            topic_categories: Vec::new(),
+            publicado_em: "2024-01-01T00:00:00Z".to_owned(),
+            duracao_segundos: 60,
+            visualizacoes,
+            curtidas,
+            total_comentarios,
+        }
+    }
+
+    #[test]
+    fn agrega_metricas_de_engajamento_do_canal() {
+        let videos = vec![video("v1", 100, 10, 2), video("v2", 200, 20, 3)];
+        let snapshots = snapshots_agregados_canal(&CanalId::new("canal-1"), &videos, "2024-01-01")
+            .expect("agregados válidos");
+
+        let valor = |metrica| {
+            snapshots
+                .iter()
+                .find(|snapshot| snapshot.metrica == metrica)
+                .map(|snapshot| snapshot.valor)
+        };
+
+        assert_eq!(valor(Metrica::Visualizacoes), Some(300));
+        assert_eq!(valor(Metrica::Curtidas), Some(30));
+        assert_eq!(valor(Metrica::TotalComentarios), Some(5));
     }
 }

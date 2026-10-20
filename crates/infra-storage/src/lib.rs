@@ -7,6 +7,10 @@
 
 #![forbid(unsafe_code)]
 
+/// Versão do schema SQLite. Incrementar quando `migrations/schema.sql`
+/// mudar de forma incompatível.
+pub const VERSAO_SCHEMA: &str = "1";
+
 mod error;
 mod mapeamento;
 mod repositorio;

@@ -129,6 +129,31 @@ fn comentarios_preservam_relacao_de_resposta() -> Resultado {
 }
 
 #[test]
+fn lista_canais_e_calcula_nicho_predominante() -> Resultado {
+    let repo = repositorio()?;
+    repo.guardar_canal(&canal("canal-1"))?;
+    repo.guardar_canal(&canal("canal-2"))?;
+    assert_eq!(repo.listar_canais()?.len(), 2);
+
+    let videos = [
+        video("video-1", "canal-1", "2024-01-01T00:00:00Z"),
+        video("video-2", "canal-1", "2024-01-02T00:00:00Z"),
+        video("video-3", "canal-1", "2024-01-03T00:00:00Z"),
+    ];
+    repo.upsert_videos_batch(&videos)?;
+    repo.guardar_classificacao(&classificacao("video-1", Nicho::Programacao))?;
+    repo.guardar_classificacao(&classificacao("video-2", Nicho::Programacao))?;
+    repo.guardar_classificacao(&classificacao("video-3", Nicho::Educacao))?;
+
+    assert_eq!(
+        repo.nicho_do_canal(&CanalId::new("canal-1"))?,
+        Some(Nicho::Programacao)
+    );
+    assert_eq!(repo.nicho_do_canal(&CanalId::new("canal-2"))?, None);
+    Ok(())
+}
+
+#[test]
 fn upsert_videos_batch_e_idempotente() -> Resultado {
     let repo = repositorio()?;
     let canal = canal("canal-1");

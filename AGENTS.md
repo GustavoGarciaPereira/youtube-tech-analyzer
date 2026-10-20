@@ -88,3 +88,8 @@ executa DELETE + INSERT internamente, disparando o CASCADE e apagando registos
 dependentes. Usar sempre `INSERT ... ON CONFLICT(id) DO UPDATE`. A única
 exceção deliberada são os snapshots, que usam `ON CONFLICT DO NOTHING` na
 chave composta para preservar o histórico diário.
+
+## 9. Comparações numéricas com zero
+`f64::signum(0.0)` devolve `1.0` em Rust (não `0.0`). Para comparações tipo
+"maior/menor/igual", usar sempre
+`if x > 0.0 { 1 } else if x < 0.0 { -1 } else { 0 }`, nunca `x.signum()`.

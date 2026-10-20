@@ -8,9 +8,13 @@
 pub mod config;
 pub mod errors;
 pub mod eventos;
+pub mod relatorio;
 pub mod use_cases;
 
 pub use config::ColetaConfig;
 pub use errors::ErroAplicacao;
 pub use eventos::{EventoProgresso, FalhaVideo, RelatorioColeta};
-pub use use_cases::ColetarCanalUseCase;
+pub use relatorio::{
+    ComparacaoPares, MetadadosReproducao, RelatorioCanal, RelatorioConfig, TendenciaMetrica,
+};
+pub use use_cases::{ColetarCanalUseCase, GerarRelatorioUseCase};

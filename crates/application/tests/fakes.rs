@@ -1,3 +1,6 @@
+// Módulo partilhado por vários testes; cada binário usa um subconjunto.
+#![allow(dead_code)]
+
 use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
@@ -134,6 +137,7 @@ struct EstadoFake {
     comentarios: HashMap<ComentarioId, Comentario>,
     snapshots: Vec<Snapshot>,
     classificacoes: HashMap<VideoId, ClassificacaoNicho>,
+    nicho_por_canal: HashMap<CanalId, Nicho>,
 }
 
 /// Repositório em memória para testes.
@@ -165,6 +169,11 @@ impl FakeRepositorio {
     pub fn contar_videos(&self) -> usize {
         self.estado().videos.len()
     }
+
+    /// Define o nicho devolvido por `nicho_do_canal`.
+    pub fn definir_nicho(&self, canal_id: CanalId, nicho: Nicho) {
+        self.estado().nicho_por_canal.insert(canal_id, nicho);
+    }
 }
 
 impl Default for FakeRepositorio {
@@ -181,6 +190,20 @@ impl RepositorioDeCanais for FakeRepositorio {
 
     fn obter_canal(&self, id: &CanalId) -> Result<Option<Canal>, ErroDominio> {
         Ok(self.estado().canais.get(id).cloned())
+    }
+
+    fn listar_canais(&self) -> Result<Vec<Canal>, ErroDominio> {
+        let mut canais: Vec<Canal> = self.estado().canais.values().cloned().collect();
+        canais.sort_by(|a, b| {
+            a.nome
+                .cmp(&b.nome)
+                .then_with(|| a.id.as_str().cmp(b.id.as_str()))
+        });
+        Ok(canais)
+    }
+
+    fn nicho_do_canal(&self, id: &CanalId) -> Result<Option<Nicho>, ErroDominio> {
+        Ok(self.estado().nicho_por_canal.get(id).copied())
     }
 
     fn guardar_video(&self, video: &Video) -> Result<(), ErroDominio> {

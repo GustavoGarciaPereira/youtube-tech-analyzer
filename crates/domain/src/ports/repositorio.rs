@@ -19,6 +19,13 @@ pub trait RepositorioDeCanais: Send + Sync {
     /// Obtém um canal pelo seu identificador.
     fn obter_canal(&self, id: &CanalId) -> Result<Option<Canal>, ErroDominio>;
 
+    /// Lista todos os canais conhecidos.
+    fn listar_canais(&self) -> Result<Vec<Canal>, ErroDominio>;
+
+    /// Devolve o nicho predominante de um canal, calculado a partir das
+    /// classificações dos seus vídeos.
+    fn nicho_do_canal(&self, id: &CanalId) -> Result<Option<Nicho>, ErroDominio>;
+
     /// Insere ou atualiza um vídeo.
     fn guardar_video(&self, video: &Video) -> Result<(), ErroDominio>;
 

@@ -7,5 +7,9 @@
 #![forbid(unsafe_code)]
 
 fn main() {
-    println!("App a iniciar");
+    let metadados = application::MetadadosReproducao::new(infra_storage::VERSAO_SCHEMA, None);
+    println!(
+        "App a iniciar (commit {}, schema {})",
+        metadados.hash_commit, metadados.versao_schema
+    );
 }
