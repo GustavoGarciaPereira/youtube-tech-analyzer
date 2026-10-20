@@ -16,5 +16,7 @@ fn main() {
         .unwrap_or_else(|| "desconhecido".to_owned());
 
     println!("cargo:rustc-env=GIT_HASH={hash}");
-    println!("cargo:rerun-if-changed=../../.git/HEAD");
+    // O ficheiro `.git/HEAD` não muda em cada commit (contém apenas a ref);
+    // vigiar o diretório `.git` garante que o hash é atualizado após commits.
+    println!("cargo:rerun-if-changed=../../.git");
 }
