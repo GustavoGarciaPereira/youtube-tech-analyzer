@@ -97,3 +97,16 @@ chave composta para preservar o histórico diário.
 `f64::signum(0.0)` devolve `1.0` em Rust (não `0.0`). Para comparações tipo
 "maior/menor/igual", usar sempre
 `if x > 0.0 { 1 } else if x < 0.0 { -1 } else { 0 }`, nunca `x.signum()`.
+
+## 10. ClassificadorDeNicho e comentários
+A trait recebe `comentarios` mas v1 ignora (hash usa só título+descrição+tags).
+Quem chamar deve passar `&[]` para não pagar IO. Se v2 usar comentários,
+o `hash_conteudo` tem de os incluir — senão há cache hits incorrectos.
+
+## 11. Classificações: canónica vs cache
+- `classificacoes_nicho` (canónica): PK `(video_id)`. Lida pelo relatório e
+  por `nicho_do_canal`.
+- `classificacoes_nicho_cache` (LLM): PK composta
+  `(video_id, hash_conteudo, versao_classificador)`. Só evita re-chamar o
+  LLM; nunca é lida pelo relatório.
+- Todo caso de uso que classifica escreve nas duas. Nunca só numa.

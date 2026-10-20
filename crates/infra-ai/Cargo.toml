@@ -15,4 +15,5 @@ tokio = { workspace = true, features = ["process"] }
 tracing.workspace = true
 
 [dev-dependencies]
+infra-youtube = { path = "../infra-youtube" }
 tokio-test.workspace = true

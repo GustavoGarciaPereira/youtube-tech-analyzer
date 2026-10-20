@@ -107,6 +107,24 @@ async fn cache_miss_chama_e_grava() {
 }
 
 #[tokio::test]
+async fn detalhe_inclui_justificativa_do_llm() {
+    let cliente = Arc::new(FakeClienteLLM::novo(vec![FakeClienteLLM::resposta(&json(
+        "programacao",
+        0.9,
+    ))]));
+    let cache = Arc::new(FakeCache::new());
+    let classificador = criar(&cliente, &cache, "v1");
+
+    let detalhe = classificador
+        .classificar_detalhado(&video("v1", "Rust"))
+        .await
+        .expect("classificação detalhada");
+
+    assert_eq!(detalhe.justificativa.as_deref(), Some("teste"));
+    assert_eq!(detalhe.classificacao.nicho, Nicho::Programacao);
+}
+
+#[tokio::test]
 async fn segunda_chamada_usa_o_cache() {
     let cliente = Arc::new(FakeClienteLLM::novo(vec![FakeClienteLLM::resposta(&json(
         "programacao",

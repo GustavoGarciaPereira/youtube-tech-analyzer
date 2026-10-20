@@ -13,7 +13,7 @@ pub mod hash;
 pub mod opencode;
 pub mod prompt;
 
-pub use classificador::ClassificadorComCache;
+pub use classificador::{ClassificacaoDetalhada, ClassificadorComCache};
 pub use cliente_llm::{ClienteLLM, PedidoClassificacao, RespostaBruta};
 pub use errors::ErroIA;
 pub use hash::hash_conteudo;

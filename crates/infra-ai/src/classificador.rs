@@ -24,6 +24,15 @@ use crate::errors::ErroIA;
 use crate::hash::hash_conteudo;
 use crate::prompt::{Taxonomia, VERSAO_PROMPT, formatar_prompt, formatar_template};
 
+/// Classificação com a justificativa opcional devolvida pelo LLM.
+#[derive(Debug, Clone)]
+pub struct ClassificacaoDetalhada {
+    /// Classificação persistível.
+    pub classificacao: ClassificacaoNicho,
+    /// Justificativa textual do modelo, quando disponível.
+    pub justificativa: Option<String>,
+}
+
 /// Classificador de nicho com cache por conteúdo e versão.
 pub struct ClassificadorComCache {
     cliente: Arc<dyn ClienteLLM>,
@@ -49,7 +58,14 @@ impl ClassificadorComCache {
         }
     }
 
-    async fn classificar_video(&self, video: &Video) -> Result<ClassificacaoNicho, ErroDominio> {
+    /// Classifica e devolve também a justificativa do modelo.
+    ///
+    /// Em cache hit, a justificativa é `None`, porque o cache guarda apenas a
+    /// classificação persistível.
+    pub async fn classificar_detalhado(
+        &self,
+        video: &Video,
+    ) -> Result<ClassificacaoDetalhada, ErroDominio> {
         self.taxonomia.validar().map_err(ErroDominio::from)?;
 
         let template = formatar_template(&self.taxonomia);
@@ -61,7 +77,10 @@ impl ClassificadorComCache {
             .obter(&video.id, &hash, &self.versao_classificador)
             .await?
         {
-            return Ok(classificacao);
+            return Ok(ClassificacaoDetalhada {
+                classificacao,
+                justificativa: None,
+            });
         }
 
         let pedido = PedidoClassificacao {
@@ -110,7 +129,10 @@ impl ClassificadorComCache {
             .gravar(&video.id, &hash, &self.versao_classificador, &classificacao)
             .await?;
 
-        Ok(classificacao)
+        Ok(ClassificacaoDetalhada {
+            classificacao,
+            justificativa: bruta.justificativa,
+        })
     }
 }
 
@@ -122,7 +144,11 @@ impl ClassificadorDeNicho for ClassificadorComCache {
     ) -> BoxFuture<'a, Result<ClassificacaoNicho, ErroDominio>> {
         // v1 usa apenas metadados; comentários ficam fora do hash e do prompt.
         let video = video.clone();
-        Box::pin(async move { self.classificar_video(&video).await })
+        Box::pin(async move {
+            self.classificar_detalhado(&video)
+                .await
+                .map(|detalhe| detalhe.classificacao)
+        })
     }
 }
 
@@ -130,4 +156,6 @@ impl ClassificadorDeNicho for ClassificadorComCache {
 struct RespostaLLM {
     nicho: String,
     confianca: f64,
+    #[serde(default)]
+    justificativa: Option<String>,
 }
