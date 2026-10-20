@@ -218,6 +218,36 @@ async fn idempotencia_diaria_nao_recolhe_comentarios_duas_vezes() {
 }
 
 #[tokio::test]
+async fn video_sem_comentarios_tambem_e_marcado_como_coletado() {
+    let videos = vec![video("v1", "2024-01-01T00:00:00Z")];
+    let fake = Arc::new(FakeColetor::novo(canal(), videos, HashMap::new()));
+    let repo = Arc::new(FakeRepositorio::new());
+    let coletor: Arc<dyn ColetorDeCanal> = fake.clone();
+    let repositorio: Arc<dyn RepositorioDeCanais> = repo;
+    let use_case = criar_use_case(coletor, repositorio, ColetaConfig::default());
+
+    let primeiro = use_case
+        .executar(referencia(), None, CancellationToken::new())
+        .await
+        .expect("primeira coleta");
+    assert_eq!(primeiro.videos_novos, 1);
+    assert_eq!(primeiro.comentarios_total, 0);
+    assert_eq!(fake.chamadas_comentarios(), 1);
+
+    let segundo = use_case
+        .executar(referencia(), None, CancellationToken::new())
+        .await
+        .expect("segunda coleta");
+    assert_eq!(segundo.videos_ja_coletados, 1);
+    assert_eq!(segundo.videos_novos, 0);
+    assert_eq!(
+        fake.chamadas_comentarios(),
+        1,
+        "o marcador deve existir mesmo com zero comentários"
+    );
+}
+
+#[tokio::test]
 async fn max_videos_limita_aos_mais_recentes() {
     let videos = vec![
         video("v1", "2024-01-05T00:00:00Z"),

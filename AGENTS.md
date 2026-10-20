@@ -81,3 +81,10 @@ text
   object-safe e permitirem `Arc<dyn ...>` nos casos de uso.
 - `CanalRef` é um value object de `domain`; o parsing de URLs/handles fica em
   `infra-youtube`, porque depende de `reqwest::Url`.
+
+## 8. SQLite: DELETE/REPLACE e CASCADE
+Nunca usar `INSERT OR REPLACE` em tabelas com `ON DELETE CASCADE`. O `REPLACE`
+executa DELETE + INSERT internamente, disparando o CASCADE e apagando registos
+dependentes. Usar sempre `INSERT ... ON CONFLICT(id) DO UPDATE`. A única
+exceção deliberada são os snapshots, que usam `ON CONFLICT DO NOTHING` na
+chave composta para preservar o histórico diário.
