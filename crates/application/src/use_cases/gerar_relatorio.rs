@@ -215,7 +215,9 @@ async fn gerar_relatorio(
             p_value: mk.p_value,
             p_ajustado_fdr: mk.p_value,
             slope_theil_sen: ts.slope,
+            intercept_theil_sen: ts.intercept,
             slope_ic95: ts.slope_ic95,
+            pontos: serie.clone(),
             amostra_suficiente: serie.len() >= config.aviso_amostra_minima,
         });
     }
@@ -449,7 +451,9 @@ mod tests {
             p_value,
             p_ajustado_fdr: p_value,
             slope_theil_sen: 1.0,
+            intercept_theil_sen: 0.0,
             slope_ic95: (0.9, 1.1),
+            pontos: Vec::new(),
             amostra_suficiente: true,
         }
     }

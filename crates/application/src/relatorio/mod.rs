@@ -24,8 +24,12 @@ pub struct TendenciaMetrica {
     pub p_ajustado_fdr: f64,
     /// Declive Theil-Sen em unidades por snapshot.
     pub slope_theil_sen: f64,
+    /// Intercepto Theil-Sen no índice de snapshots.
+    pub intercept_theil_sen: f64,
     /// IC95 do declive.
     pub slope_ic95: (f64, f64),
+    /// Série efetivamente usada, para visualização.
+    pub pontos: Vec<(NaiveDate, f64)>,
     /// `true` quando `n_snapshots >= aviso_amostra_minima`.
     pub amostra_suficiente: bool,
 }

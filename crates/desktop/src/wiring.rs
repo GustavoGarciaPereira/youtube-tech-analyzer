@@ -10,8 +10,8 @@ use infra_youtube::{ApiV3Coletor, MAX_DEPTH_PADRAO};
 pub struct Dependencias {
     /// Repositório SQLite.
     pub repositorio: Arc<dyn RepositorioDeCanais>,
-    /// Coletor YouTube.
-    pub coletor: Arc<dyn ColetorDeCanal>,
+    /// Coletor YouTube, se `YOUTUBE_API_KEY` estiver disponível.
+    pub coletor: Option<Arc<dyn ColetorDeCanal>>,
 }
 
 /// Caminho da base de dados.
@@ -38,11 +38,11 @@ pub fn caminho_db() -> anyhow::Result<PathBuf> {
 
 /// Abre o repositório, criando o diretório pai se necessário.
 pub fn abrir_repositorio(caminho: &Path) -> anyhow::Result<Arc<dyn RepositorioDeCanais>> {
-    if let Some(parent) = caminho.parent() {
-        if !parent.as_os_str().is_empty() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("criar diretório {}", parent.display()))?;
-        }
+    if let Some(parent) = caminho.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("criar diretório {}", parent.display()))?;
     }
 
     let caminho = caminho
@@ -67,9 +67,18 @@ pub fn montar_coletor(
 }
 
 /// Monta repositório e coletor com a profundidade padrão.
+///
+/// O coletor é opcional para permitir que a GUI arranque sem
+/// `YOUTUBE_API_KEY`; nesse caso, as operações de rede mostram um erro.
 pub fn montar(caminho: &Path, api_key: Option<String>) -> anyhow::Result<Dependencias> {
     let repositorio = abrir_repositorio(caminho)?;
-    let coletor = montar_coletor(api_key, MAX_DEPTH_PADRAO)?;
+    let coletor = match montar_coletor(api_key, MAX_DEPTH_PADRAO) {
+        Ok(coletor) => Some(coletor),
+        Err(erro) => {
+            tracing::warn!(erro = %erro, "coletor do YouTube indisponível");
+            None
+        }
+    };
     Ok(Dependencias {
         repositorio,
         coletor,

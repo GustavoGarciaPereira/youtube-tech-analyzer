@@ -17,8 +17,9 @@ apontam SEMPRE para dentro (em direção ao domínio).
   orquestram as portas. Depende apenas de `domain`.
 - `crates/infra-*` (`infra-youtube`, `infra-storage`, `infra-ai`): Implementações
   concretas das portas. Dependem de `domain`.
-- `crates/desktop`: Binário `egui`. É o *composition root*: injeta as
-  implementações concretas nos casos de uso e arranca a GUI.
+- `crates/desktop`: lib de composição + GUI `egui`, com os binários
+  `desktop` (GUI) e `yta` (CLI). É o *composition root*: injeta as
+  implementações concretas nos casos de uso.
 
 ### Regra de Dependência (NÃO VIOLAR)
 `domain` não pode ter dependências de `reqwest`, `rusqlite`, `egui` ou `tokio`.
@@ -123,3 +124,21 @@ o `hash_conteudo` tem de os incluir — senão há cache hits incorrectos.
 - `video_metricas_hoje_ja_coletadas` (com data) só evita re-coletar
   no mesmo dia — NUNCA bloqueia o dia seguinte.
 - A flag `--recoletar-comentarios` força refresh manual.
+
+## 15. GUI (`crates/desktop/src/{app,state,prefs}.rs`)
+- `eframe` 0.29 + `egui_plot` 0.29. O tema é manual (`egui::Visuals` escuro
+  com accent azul); `modern-egui` não é usado.
+- `eframe::App::update` NUNCA faz `block_on`/`.await`. Os casos de uso correm
+  em `tokio::spawn` e comunicam por `mpsc`; a GUI faz `try_recv` e agenda
+  `request_repaint_after(100ms)` enquanto houver tarefas ativas.
+- `wiring::Dependencias.coletor` é `Option`: a GUI arranca sem
+  `YOUTUBE_API_KEY`; adicionar/coletar mostra um toast. A CLI continua a usar
+  `montar_coletor` diretamente.
+- `TendenciaMetrica` transporta `pontos` e `intercept_theil_sen` para o
+  gráfico. O Markdown/CSV ignoram-nos; o JSON inclui-os.
+- Preferências em `XDG_CONFIG_HOME/yta/prefs.toml` (ou
+  `~/.config/yta/prefs.toml`), com debounce de 500 ms; falhas ao ler
+  preferências caem para os valores por omissão.
+- Ctrl+R no ecrã Relatório regenera; exportações copiam para o clipboard.
+- O crate `desktop` tem múltiplos binários; usar sempre `--bin desktop` ou
+  `--bin yta`.
