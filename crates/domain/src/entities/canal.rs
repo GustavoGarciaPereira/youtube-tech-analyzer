@@ -9,6 +9,8 @@ pub struct Canal {
     pub id: CanalId,
     /// Nome público do canal.
     pub nome: String,
+    /// Handle público do canal (por exemplo, `@canal`), quando disponível.
+    pub handle: Option<String>,
     /// URL canónica do canal.
     pub url: String,
     /// Descrição pública do canal, quando disponível.
@@ -17,4 +19,8 @@ pub struct Canal {
     pub inscritos: u64,
     /// Número total de vídeos públicos no momento da recolha.
     pub total_videos: u64,
+    /// Categorias de tópico atribuídas pelo YouTube.
+    pub topic_categories: Vec<String>,
+    /// Data de criação do canal em formato RFC 3339, quando disponível.
+    pub criado_em: Option<String>,
 }

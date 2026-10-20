@@ -1,0 +1,178 @@
+use domain::ports::RepositorioDeCanais;
+use domain::{
+    Canal, CanalId, ClassificacaoNicho, Comentario, EntidadeTipo, Metrica, Nicho, Snapshot, Video,
+};
+use infra_storage::SqliteRepositorio;
+
+type Resultado = Result<(), Box<dyn std::error::Error>>;
+
+fn repositorio() -> Result<SqliteRepositorio, infra_storage::Error> {
+    SqliteRepositorio::em_memoria()
+}
+
+fn canal(id: &str) -> Canal {
+    Canal {
+        id: CanalId::new(id),
+        nome: "Canal de Tecnologia".to_owned(),
+        handle: Some(format!("@{id}")),
+        url: format!("https://www.youtube.com/@{id}"),
+        descricao: Some("Descrição do canal".to_owned()),
+        inscritos: 10_000,
+        total_videos: 3,
+        topic_categories: vec!["Technology".to_owned()],
+        criado_em: Some("2020-01-01T00:00:00Z".to_owned()),
+    }
+}
+
+fn video(id: &str, canal_id: &str, publicado_em: &str) -> Video {
+    Video {
+        id: domain::ids::VideoId::new(id),
+        canal_id: CanalId::new(canal_id),
+        titulo: format!("Vídeo {id}"),
+        descricao: Some("Descrição do vídeo".to_owned()),
+        url: format!("https://www.youtube.com/watch?v={id}"),
+        tags: vec!["rust".to_owned(), "programação".to_owned()],
+        topic_categories: vec!["Technology".to_owned()],
+        publicado_em: publicado_em.to_owned(),
+        duracao_segundos: 600,
+        visualizacoes: 1_000,
+        curtidas: 100,
+        total_comentarios: 10,
+    }
+}
+
+fn comentario(id: &str, video_id: &str) -> Comentario {
+    Comentario {
+        id: domain::ids::ComentarioId::new(id),
+        video_id: domain::ids::VideoId::new(video_id),
+        autor: "Autor".to_owned(),
+        texto: "Comentário".to_owned(),
+        publicado_em: "2024-01-02T00:00:00Z".to_owned(),
+        curtidas: 5,
+    }
+}
+
+fn classificacao(video_id: &str, nicho: Nicho) -> ClassificacaoNicho {
+    ClassificacaoNicho {
+        video_id: domain::ids::VideoId::new(video_id),
+        nicho,
+        confianca: 0.9,
+        metodo: "teste".to_owned(),
+        data_classificacao: "2024-01-03T00:00:00Z".to_owned(),
+    }
+}
+
+#[test]
+fn canal_roundtrip_preserva_campos_json() -> Resultado {
+    let repo = repositorio()?;
+    let canal = canal("canal-1");
+
+    repo.guardar_canal(&canal)?;
+    let lido = repo.obter_canal(&canal.id)?.expect("canal existente");
+
+    assert_eq!(lido, canal);
+    Ok(())
+}
+
+#[test]
+fn inserir_mesmo_video_duas_vezes_nao_duplica_e_preserva_comentarios() -> Resultado {
+    let repo = repositorio()?;
+    let canal = canal("canal-1");
+    repo.guardar_canal(&canal)?;
+
+    let mut video = video("video-1", "canal-1", "2024-01-01T00:00:00Z");
+    repo.guardar_video(&video)?;
+    repo.guardar_comentario(&comentario("comentario-1", "video-1"))?;
+
+    video.titulo = "Título atualizado".to_owned();
+    repo.guardar_video(&video)?;
+
+    let videos = repo.listar_videos(&canal.id)?;
+    assert_eq!(videos.len(), 1);
+    assert_eq!(videos[0].titulo, "Título atualizado");
+    assert_eq!(repo.listar_comentarios(&video.id)?.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn snapshots_deduplicam_no_mesmo_dia_e_preservam_dias_diferentes() -> Resultado {
+    let repo = repositorio()?;
+    let canal_id = CanalId::new("canal-1");
+    let snapshot = |data: &str, valor: i64| {
+        Snapshot::novo(
+            EntidadeTipo::Canal,
+            "canal-1",
+            Metrica::Inscritos,
+            valor,
+            data,
+        )
+    };
+
+    repo.guardar_snapshot(&snapshot("2024-01-01T00:00:00Z", 100))?;
+    repo.guardar_snapshot(&snapshot("2024-01-01T00:00:00Z", 999))?;
+    repo.guardar_snapshot(&snapshot("2024-01-02T00:00:00Z", 200))?;
+
+    let serie = repo.listar_serie_temporal(EntidadeTipo::Canal, "canal-1", Metrica::Inscritos)?;
+    assert_eq!(serie.len(), 2);
+    assert_eq!(serie[0].valor, 100);
+    assert_eq!(serie[1].valor, 200);
+
+    let snapshots = repo.listar_snapshots(&canal_id)?;
+    assert_eq!(snapshots.len(), 2);
+    Ok(())
+}
+
+#[test]
+fn listar_videos_ordena_por_data_de_publicacao() -> Resultado {
+    let repo = repositorio()?;
+    let canal = canal("canal-1");
+    repo.guardar_canal(&canal)?;
+
+    for (id, data) in [
+        ("video-2", "2023-01-01T00:00:00Z"),
+        ("video-1", "2022-01-01T00:00:00Z"),
+        ("video-3", "2024-01-01T00:00:00Z"),
+    ] {
+        repo.guardar_video(&video(id, "canal-1", data))?;
+    }
+
+    let videos = repo.listar_videos(&canal.id)?;
+    let datas: Vec<&str> = videos
+        .iter()
+        .map(|video| video.publicado_em.as_str())
+        .collect();
+    assert_eq!(
+        datas,
+        vec![
+            "2022-01-01T00:00:00Z",
+            "2023-01-01T00:00:00Z",
+            "2024-01-01T00:00:00Z"
+        ]
+    );
+    Ok(())
+}
+
+#[test]
+fn listar_videos_por_nicho_usa_a_classificacao_persistida() -> Resultado {
+    let repo = repositorio()?;
+    let canal = canal("canal-1");
+    repo.guardar_canal(&canal)?;
+
+    let programacao = video("video-1", "canal-1", "2024-01-01T00:00:00Z");
+    let educacao = video("video-2", "canal-1", "2024-01-02T00:00:00Z");
+    repo.guardar_video(&programacao)?;
+    repo.guardar_video(&educacao)?;
+    repo.guardar_classificacao(&classificacao("video-1", Nicho::Programacao))?;
+    repo.guardar_classificacao(&classificacao("video-2", Nicho::Educacao))?;
+
+    let videos = repo.listar_videos_por_nicho(Nicho::Programacao)?;
+    assert_eq!(videos.len(), 1);
+    assert_eq!(videos[0].id, programacao.id);
+
+    let lida = repo
+        .obter_classificacao(&programacao.id)?
+        .expect("classificação existente");
+    assert_eq!(lida.nicho, Nicho::Programacao);
+    assert_eq!(lida.metodo, "teste");
+    Ok(())
+}

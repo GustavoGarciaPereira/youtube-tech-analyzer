@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 
+use crate::errors::ErroDominio;
 use crate::ids::VideoId;
 
 /// Nicho atribuído a um vídeo pelo classificador.
@@ -16,6 +17,35 @@ pub enum Nicho {
     Outro,
 }
 
+impl Nicho {
+    /// Representação estável usada na persistência e nos relatórios.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Programacao => "programacao",
+            Self::Educacao => "educacao",
+            Self::Tecnologia => "tecnologia",
+            Self::Outro => "outro",
+        }
+    }
+}
+
+impl TryFrom<&str> for Nicho {
+    type Error = ErroDominio;
+
+    fn try_from(valor: &str) -> Result<Self, Self::Error> {
+        match valor {
+            "programacao" => Ok(Self::Programacao),
+            "educacao" => Ok(Self::Educacao),
+            "tecnologia" => Ok(Self::Tecnologia),
+            "outro" => Ok(Self::Outro),
+            outro => Err(ErroDominio::DadosInvalidos(format!(
+                "nicho desconhecido: {outro}"
+            ))),
+        }
+    }
+}
+
 /// Resultado da classificação de um vídeo.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ClassificacaoNicho {
@@ -25,4 +55,8 @@ pub struct ClassificacaoNicho {
     pub nicho: Nicho,
     /// Confiança do classificador, entre `0.0` e `1.0`.
     pub confianca: f32,
+    /// Método ou modelo usado na classificação.
+    pub metodo: String,
+    /// Data da classificação em formato RFC 3339.
+    pub data_classificacao: String,
 }

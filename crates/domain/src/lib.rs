@@ -10,7 +10,9 @@ pub mod errors;
 pub mod ids;
 pub mod ports;
 
-pub use entities::{Canal, ClassificacaoNicho, Comentario, Nicho, Snapshot, Video};
+pub use entities::{
+    Canal, ClassificacaoNicho, Comentario, EntidadeTipo, Metrica, Nicho, Snapshot, Video,
+};
 pub use errors::ErroDominio;
 pub use ids::{CanalId, ComentarioId, VideoId};
 pub use ports::{ClassificadorDeNicho, ColetorDeCanal, RepositorioDeCanais};

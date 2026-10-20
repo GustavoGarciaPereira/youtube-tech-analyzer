@@ -16,5 +16,5 @@ pub struct Comentario {
     /// Data de publicação em formato RFC 3339.
     pub publicado_em: String,
     /// Número de gostos no momento da recolha.
-    pub gostos: u64,
+    pub curtidas: u64,
 }

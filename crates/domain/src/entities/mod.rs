@@ -9,5 +9,5 @@ pub mod video;
 pub use canal::Canal;
 pub use comentario::Comentario;
 pub use nicho::{ClassificacaoNicho, Nicho};
-pub use snapshot::Snapshot;
+pub use snapshot::{EntidadeTipo, Metrica, Snapshot};
 pub use video::Video;

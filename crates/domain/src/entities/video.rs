@@ -11,8 +11,14 @@ pub struct Video {
     pub canal_id: CanalId,
     /// Título do vídeo.
     pub titulo: String,
+    /// Descrição pública do vídeo, quando disponível.
+    pub descricao: Option<String>,
     /// URL canónica do vídeo.
     pub url: String,
+    /// Tags públicas associadas ao vídeo.
+    pub tags: Vec<String>,
+    /// Categorias de tópico atribuídas pelo YouTube.
+    pub topic_categories: Vec<String>,
     /// Data de publicação em formato RFC 3339.
     pub publicado_em: String,
     /// Duração do vídeo em segundos.
@@ -20,5 +26,7 @@ pub struct Video {
     /// Número de visualizações no momento da recolha.
     pub visualizacoes: u64,
     /// Número de gostos no momento da recolha.
-    pub gostos: u64,
+    pub curtidas: u64,
+    /// Número total de comentários no momento da recolha.
+    pub total_comentarios: u64,
 }

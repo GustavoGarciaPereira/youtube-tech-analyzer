@@ -1,32 +1,129 @@
 use serde::{Deserialize, Serialize};
 
-use crate::entities::{
-    canal::Canal, comentario::Comentario, nicho::ClassificacaoNicho, video::Video,
-};
-use crate::ids::CanalId;
+use crate::errors::ErroDominio;
 
-/// Captura pontual do estado de um canal e do seu conteúdo.
+/// Tipo de entidade a que uma métrica se refere.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntidadeTipo {
+    /// Métrica agregada de um canal.
+    Canal,
+    /// Métrica de um vídeo.
+    Video,
+    /// Métrica de um comentário.
+    Comentario,
+}
+
+impl EntidadeTipo {
+    /// Representação estável usada na persistência e nos relatórios.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Canal => "canal",
+            Self::Video => "video",
+            Self::Comentario => "comentario",
+        }
+    }
+}
+
+impl TryFrom<&str> for EntidadeTipo {
+    type Error = ErroDominio;
+
+    fn try_from(valor: &str) -> Result<Self, Self::Error> {
+        match valor {
+            "canal" => Ok(Self::Canal),
+            "video" => Ok(Self::Video),
+            "comentario" => Ok(Self::Comentario),
+            outro => Err(ErroDominio::DadosInvalidos(format!(
+                "tipo de entidade desconhecido: {outro}"
+            ))),
+        }
+    }
+}
+
+/// Métrica observada num snapshot.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Metrica {
+    /// Número de subscritores de um canal.
+    Inscritos,
+    /// Número total de vídeos de um canal.
+    TotalVideos,
+    /// Número de visualizações de um vídeo.
+    Visualizacoes,
+    /// Número de gostos de um vídeo ou comentário.
+    Curtidas,
+    /// Número total de comentários de um vídeo.
+    TotalComentarios,
+}
+
+impl Metrica {
+    /// Representação estável usada na persistência e nos relatórios.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Inscritos => "inscritos",
+            Self::TotalVideos => "total_videos",
+            Self::Visualizacoes => "visualizacoes",
+            Self::Curtidas => "curtidas",
+            Self::TotalComentarios => "total_comentarios",
+        }
+    }
+}
+
+impl TryFrom<&str> for Metrica {
+    type Error = ErroDominio;
+
+    fn try_from(valor: &str) -> Result<Self, Self::Error> {
+        match valor {
+            "inscritos" => Ok(Self::Inscritos),
+            "total_videos" => Ok(Self::TotalVideos),
+            "visualizacoes" => Ok(Self::Visualizacoes),
+            "curtidas" => Ok(Self::Curtidas),
+            "total_comentarios" => Ok(Self::TotalComentarios),
+            outra => Err(ErroDominio::DadosInvalidos(format!(
+                "métrica desconhecida: {outra}"
+            ))),
+        }
+    }
+}
+
+/// Observação pontual de uma métrica.
 ///
-/// A chave lógica de um snapshot é o par (`canal.id`, `data_coleta`), o que
-/// permite que a persistência seja idempotente.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// A chave lógica é o par composto
+/// (`entidade_tipo`, `entidade_id`, `metrica`, `data_coleta`). Duas execuções
+/// no mesmo dia para a mesma métrica representam a mesma observação; dias
+/// diferentes produzem linhas históricas distintas.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Snapshot {
+    /// Tipo da entidade observada.
+    pub entidade_tipo: EntidadeTipo,
+    /// Identificador da entidade observada.
+    pub entidade_id: String,
+    /// Métrica observada.
+    pub metrica: Metrica,
+    /// Valor inteiro da métrica no momento da recolha.
+    pub valor: i64,
     /// Data da recolha em formato RFC 3339.
     pub data_coleta: String,
-    /// Metadados do canal no momento da recolha.
-    pub canal: Canal,
-    /// Vídeos observados no momento da recolha.
-    pub videos: Vec<Video>,
-    /// Comentários observados no momento da recolha.
-    pub comentarios: Vec<Comentario>,
-    /// Classificações de nicho atribuídas aos vídeos.
-    pub classificacoes: Vec<ClassificacaoNicho>,
 }
 
 impl Snapshot {
-    /// Identificador do canal capturado.
+    /// Cria uma observação de métrica.
     #[must_use]
-    pub fn canal_id(&self) -> &CanalId {
-        &self.canal.id
+    pub fn novo(
+        entidade_tipo: EntidadeTipo,
+        entidade_id: impl Into<String>,
+        metrica: Metrica,
+        valor: i64,
+        data_coleta: impl Into<String>,
+    ) -> Self {
+        Self {
+            entidade_tipo,
+            entidade_id: entidade_id.into(),
+            metrica,
+            valor,
+            data_coleta: data_coleta.into(),
+        }
     }
 }
