@@ -1,5 +1,15 @@
 # YouTube Tech Analyzer
 
+[![CI](https://github.com/GustavoGarciaPereira/youtube-tech-analyzer/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/GustavoGarciaPereira/youtube-tech-analyzer/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
+
+<!--
+## Screenshot
+
+![GUI — ecrã de relatório](docs/screenshot-relatorio.png)
+-->
+
 Pipeline de ETL e análise de canais de tecnologia do YouTube, escrito em Rust.
 
 O projeto recolhe metadados de canais, vídeos e comentários, guarda snapshots
@@ -71,7 +81,9 @@ A camada `application` não depende de `infra-*` nem de `desktop`.
 
 ## Requisitos
 
-- Rust stable **1.85+** (o repositório usa `rust-toolchain.toml` com `stable`).
+- Rust stable com edition 2024 (1.85+). O `rust-toolchain.toml` usa o canal
+  `stable`; se o teu toolchain estiver desatualizado, corre `rustup update`
+  antes de compilar.
 - Uma chave da **YouTube Data API v3** para adicionar e coletar canais.
 - Linux com X11 ou Wayland e drivers OpenGL para a GUI.
   A CLI funciona sem ambiente gráfico.
@@ -93,15 +105,19 @@ git clone https://github.com/GustavoGarciaPereira/youtube-tech-analyzer.git
 cd youtube-tech-analyzer
 ```
 
-Cria um ficheiro `.env` na raiz do projeto:
+Copia o exemplo e preenche o `.env` na raiz do projeto:
+
+```bash
+cp .env.example .env
+```
 
 ```dotenv
 YOUTUBE_API_KEY=a-tua-chave-da-youtube-data-api-v3
 ```
 
-O `.env` é carregado automaticamente por `dotenvy`. Variáveis já exportadas
-na shell têm prioridade. O ficheiro está no `.gitignore`; nunca faças commit
-da chave.
+O `.env.example` não contém segredos. O `.env` é carregado automaticamente
+por `dotenvy`. Variáveis já exportadas na shell têm prioridade. O `.env` está
+no `.gitignore`; nunca faças commit da chave.
 
 Variáveis opcionais:
 
@@ -263,6 +279,8 @@ independente de qualquer classificação automática por LLM.
 
 `--max-depth` controla a profundidade de respostas a comentários. O valor por
 omissão é `2`; `-1` recolhe todas as respostas e deve ser usado com cuidado.
+`--max-depth -1` pode multiplicar o consumo de quota por 10–20× num canal com
+muitos comentários. Para uma coleta de rotina, mantém o default `2`.
 
 ### Formato dos relatórios
 
@@ -347,6 +365,7 @@ usa upserts com `ON CONFLICT` para preservar registos dependentes.
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo build --workspace
 ```
 
 A suite cobre domínio, casos de uso, adaptadores, CLI e funções puras da GUI.
@@ -357,8 +376,14 @@ A suite cobre domínio, casos de uso, adaptadores, CLI e funções puras da GUI.
 
 ```text
 .
+├── .env.example
+├── .github/workflows/ci.yml
+├── CONTRIBUTING.md
+├── LICENSE
+├── README.md
 ├── Cargo.toml
 ├── rust-toolchain.toml
+├── docs/
 ├── crates/
 │   ├── domain/
 │   ├── application/
@@ -405,13 +430,20 @@ Requer também `YOUTUBE_API_KEY` e o binário `opencode` disponível no `PATH`
 - A remoção de canais está desativada no MVP.
 - Relatórios com poucos snapshots produzem avisos, não tendências.
 - Próximos passos naturais:
-  - `LICENSE`, `.env.example` e CI no GitHub;
   - automação diária com systemd timer ou cron;
-  - integração da classificação por LLM no pipeline.
+  - integração da classificação por LLM no pipeline;
+  - screenshots e documentação visual da GUI.
+
+---
+
+## Contribuições
+
+Lê [CONTRIBUTING.md](CONTRIBUTING.md) antes de abrir um PR. O guia cobre o
+ambiente, as verificações obrigatórias, as regras de arquitetura e a
+idempotência da coleta.
 
 ---
 
 ## Licença
 
-A licença ainda não está definida neste repositório. Adiciona um ficheiro
-`LICENSE` antes de reutilizar ou distribuir o código.
+MIT — ver [LICENSE](LICENSE).
