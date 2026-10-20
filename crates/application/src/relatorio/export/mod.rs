@@ -38,7 +38,7 @@ pub fn para_markdown(relatorio: &RelatorioCanal) -> String {
     if total == 0 {
         let _ = writeln!(
             saida,
-            "No período de {} a {}, não foi possível analisar nenhuma métrica; ver a secção Avisos.",
+            "No período de {} a {}, não foi possível analisar nenhuma métrica: são necessários pelo menos 5 snapshots em dias distintos por métrica (valor por omissão); snapshots de vídeos do mesmo dia não formam uma série temporal. Ver a secção Avisos.",
             relatorio.periodo_inicio, relatorio.periodo_fim
         );
     } else if significativas.is_empty() {

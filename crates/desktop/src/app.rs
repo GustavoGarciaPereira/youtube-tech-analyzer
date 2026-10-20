@@ -990,7 +990,7 @@ pub fn formatar_sumario(relatorio: &RelatorioCanal) -> String {
     let total = relatorio.tendencias.len();
     if total == 0 {
         return format!(
-            "No período de {} a {}, não foi possível analisar nenhuma métrica. Vê os avisos.",
+            "No período de {} a {}, não foi possível analisar nenhuma métrica: são necessários pelo menos 5 snapshots em dias distintos por métrica (valor por omissão). Snapshots de vídeos do mesmo dia são observações do mesmo instante, não uma série temporal. Vê os avisos.",
             relatorio.periodo_inicio, relatorio.periodo_fim
         );
     }
@@ -1116,6 +1116,7 @@ mod tests {
     fn resumo_sem_metricas_nao_diz_zero_metricas() {
         let texto = formatar_sumario(&relatorio(Vec::new()));
         assert!(texto.contains("não foi possível analisar nenhuma métrica"));
+        assert!(texto.contains("dias distintos"));
         assert!(!texto.contains("0 métricas"));
     }
 
