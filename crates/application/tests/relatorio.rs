@@ -9,7 +9,7 @@ use application::{
     RelatorioConfig,
 };
 use chrono::{Days, NaiveDate, Utc};
-use domain::Nicho;
+use domain::CategoriaManual;
 use domain::entities::canal::Canal;
 use domain::entities::snapshot::{EntidadeTipo, Metrica, Snapshot};
 use domain::ids::CanalId;
@@ -132,7 +132,10 @@ async fn happy_path_gera_tres_tendencias_crescentes() {
             .all(|tendencia| tendencia.amostra_suficiente)
     );
     assert!(
-        relatorio.avisos.is_empty(),
+        relatorio
+            .avisos
+            .iter()
+            .any(|aviso| aviso.contains("canal sem categoria manual")),
         "avisos: {:?}",
         relatorio.avisos
     );
@@ -220,27 +223,31 @@ async fn baseline_de_pares_calcula_percentil() {
 }
 
 #[tokio::test]
-async fn baseline_por_nicho_filtra_pares() {
+async fn baseline_por_categoria_filtra_pares_e_e_deterministico() {
     let repo = Arc::new(FakeRepositorio::new());
     repo.guardar_canal(&canal("alvo", "Alvo"))
         .expect("canal guardado");
-    repo.guardar_canal(&canal("mesmo-nicho", "Mesmo nicho"))
+    repo.guardar_canal(&canal("mesma-categoria", "Mesma categoria"))
         .expect("canal guardado");
     for indice in 0..5 {
-        repo.guardar_canal(&canal(
-            &format!("outro-{indice}"),
-            &format!("Outro {indice}"),
-        ))
-        .expect("canal guardado");
-        repo.definir_nicho(CanalId::new(format!("outro-{indice}")), Nicho::Tecnologia);
+        let id = format!("outro-{indice}");
+        repo.guardar_canal(&canal(&id, &format!("Outro {indice}")))
+            .expect("canal guardado");
+        repo.definir_categoria_manual(&CanalId::new(&id), CategoriaManual::Tecnologia)
+            .expect("categoria");
     }
-    repo.definir_nicho(CanalId::new("alvo"), Nicho::Programacao);
-    repo.definir_nicho(CanalId::new("mesmo-nicho"), Nicho::Programacao);
+    repo.definir_categoria_manual(&CanalId::new("alvo"), CategoriaManual::Programacao)
+        .expect("categoria");
+    repo.definir_categoria_manual(
+        &CanalId::new("mesma-categoria"),
+        CategoriaManual::Programacao,
+    )
+    .expect("categoria");
 
     let mut snapshots = Vec::new();
     snapshots.extend(serie_linear("alvo", Metrica::Visualizacoes, 30, 1, 10));
     snapshots.extend(serie_linear(
-        "mesmo-nicho",
+        "mesma-categoria",
         Metrica::Visualizacoes,
         30,
         2,
@@ -253,21 +260,123 @@ async fn baseline_por_nicho_filtra_pares() {
         metricas: vec![Metrica::Visualizacoes],
         ..RelatorioConfig::default()
     };
+    let primeiro = executar(Arc::clone(&repo), config.clone(), "alvo")
+        .await
+        .expect("primeiro relatório");
+    let segundo = executar(repo, config, "alvo")
+        .await
+        .expect("segundo relatório");
+
+    let comparacao = primeiro.comparacoes.first().expect("comparação com pares");
+    assert_eq!(comparacao.grupo, "categoria:programacao");
+    assert_eq!(comparacao.n_pares, 1);
+    assert_eq!(
+        comparacao.percentil_canal_entre_pares,
+        segundo.comparacoes[0].percentil_canal_entre_pares
+    );
+}
+
+#[tokio::test]
+async fn sem_categoria_usa_todos_e_avisa() {
+    let repo = Arc::new(FakeRepositorio::new());
+    for (id, nome) in [("alvo", "Alvo"), ("par-1", "Par 1"), ("par-2", "Par 2")] {
+        repo.guardar_canal(&canal(id, nome))
+            .expect("canal guardado");
+    }
+    let mut snapshots = Vec::new();
+    snapshots.extend(serie_linear("alvo", Metrica::Visualizacoes, 30, 2, 10));
+    snapshots.extend(serie_linear("par-1", Metrica::Visualizacoes, 30, 1, 10));
+    snapshots.extend(serie_linear("par-2", Metrica::Visualizacoes, 30, 3, 10));
+    repo.upsert_snapshots_batch(&snapshots)
+        .expect("snapshots guardados");
+
+    let config = RelatorioConfig {
+        metricas: vec![Metrica::Visualizacoes],
+        ..RelatorioConfig::default()
+    };
     let relatorio = executar(repo, config, "alvo")
         .await
         .expect("relatório gerado");
 
     let comparacao = relatorio.comparacoes.first().expect("comparação com pares");
-    assert_eq!(comparacao.grupo, "programacao");
-    assert_eq!(comparacao.n_pares, 1);
+    assert_eq!(comparacao.grupo, "todos");
+    assert_eq!(comparacao.n_pares, 2);
+    assert!(
+        relatorio
+            .avisos
+            .iter()
+            .any(|aviso| aviso.contains("canal sem categoria manual"))
+    );
+}
+
+#[tokio::test]
+async fn categoria_sem_pares_faz_fallback_para_todos_e_avisa() {
+    let repo = Arc::new(FakeRepositorio::new());
+    for (id, nome) in [("alvo", "Alvo"), ("par-1", "Par 1"), ("par-2", "Par 2")] {
+        repo.guardar_canal(&canal(id, nome))
+            .expect("canal guardado");
+    }
+    repo.definir_categoria_manual(&CanalId::new("alvo"), CategoriaManual::Programacao)
+        .expect("categoria");
+    repo.definir_categoria_manual(&CanalId::new("par-1"), CategoriaManual::Tecnologia)
+        .expect("categoria");
+    repo.definir_categoria_manual(&CanalId::new("par-2"), CategoriaManual::Tecnologia)
+        .expect("categoria");
+
+    let mut snapshots = Vec::new();
+    snapshots.extend(serie_linear("alvo", Metrica::Visualizacoes, 30, 2, 10));
+    snapshots.extend(serie_linear("par-1", Metrica::Visualizacoes, 30, 1, 10));
+    snapshots.extend(serie_linear("par-2", Metrica::Visualizacoes, 30, 3, 10));
+    repo.upsert_snapshots_batch(&snapshots)
+        .expect("snapshots guardados");
+
+    let config = RelatorioConfig {
+        metricas: vec![Metrica::Visualizacoes],
+        ..RelatorioConfig::default()
+    };
+    let relatorio = executar(repo, config, "alvo")
+        .await
+        .expect("relatório gerado");
+
+    let comparacao = relatorio.comparacoes.first().expect("comparação com pares");
+    assert_eq!(comparacao.grupo, "todos");
+    assert_eq!(comparacao.n_pares, 2);
+    assert!(
+        relatorio
+            .avisos
+            .iter()
+            .any(|aviso| aviso.contains("sem pares na categoria 'programacao'"))
+    );
+}
+
+#[tokio::test]
+async fn canal_sem_snapshots_gera_relatorio_com_avisos() {
+    let repo = Arc::new(FakeRepositorio::new());
+    repo.guardar_canal(&canal("canal-1", "Canal"))
+        .expect("canal guardado");
+    repo.definir_categoria_manual(&CanalId::new("canal-1"), CategoriaManual::Programacao)
+        .expect("categoria");
+
+    let relatorio = executar(repo, RelatorioConfig::default(), "canal-1")
+        .await
+        .expect("relatório sem dados");
+
+    assert!(relatorio.tendencias.is_empty());
+    assert!(
+        relatorio
+            .avisos
+            .iter()
+            .any(|aviso| aviso.contains("amostra insuficiente"))
+    );
 }
 
 #[tokio::test]
 async fn lote_isola_erros_e_aplica_fdr_uma_vez() {
     let repo = Arc::new(FakeRepositorio::new());
-    for id in ["a", "b", "c"] {
+    for id in ["a", "b"] {
         repo.guardar_canal(&canal(id, id)).expect("canal guardado");
     }
+    // "c" não existe no repositório; é o erro isolado do lote.
     let mut snapshots = Vec::new();
     snapshots.extend(serie_linear("a", Metrica::Visualizacoes, 30, 1, 10));
     snapshots.extend(serie_linear("b", Metrica::Visualizacoes, 6, 1, 10));

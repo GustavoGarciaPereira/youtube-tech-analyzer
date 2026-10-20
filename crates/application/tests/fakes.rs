@@ -20,6 +20,7 @@ use domain::entities::{
 use domain::errors::ErroDominio;
 use domain::ids::{CanalId, ComentarioId, VideoId};
 use domain::ports::{ColetorDeCanal, RepositorioDeCanais};
+use domain::value_objects::CategoriaManual;
 
 /// Coletor configurável para testes, sem rede.
 pub struct FakeColetor {
@@ -138,6 +139,7 @@ struct EstadoFake {
     snapshots: Vec<Snapshot>,
     classificacoes: HashMap<VideoId, ClassificacaoNicho>,
     nicho_por_canal: HashMap<CanalId, Nicho>,
+    categoria_por_canal: HashMap<CanalId, CategoriaManual>,
 }
 
 /// Repositório em memória para testes.
@@ -204,6 +206,52 @@ impl RepositorioDeCanais for FakeRepositorio {
 
     fn nicho_do_canal(&self, id: &CanalId) -> Result<Option<Nicho>, ErroDominio> {
         Ok(self.estado().nicho_por_canal.get(id).copied())
+    }
+
+    fn definir_categoria_manual(
+        &self,
+        canal_id: &CanalId,
+        categoria: CategoriaManual,
+    ) -> Result<(), ErroDominio> {
+        let mut estado = self.estado();
+        if !estado.canais.contains_key(canal_id) {
+            return Err(ErroDominio::NaoEncontrado {
+                recurso: "canal",
+                id: canal_id.as_str().to_owned(),
+            });
+        }
+        estado
+            .categoria_por_canal
+            .insert(canal_id.clone(), categoria);
+        Ok(())
+    }
+
+    fn categoria_manual_do_canal(
+        &self,
+        canal_id: &CanalId,
+    ) -> Result<Option<CategoriaManual>, ErroDominio> {
+        Ok(self.estado().categoria_por_canal.get(canal_id).copied())
+    }
+
+    fn canais_por_categoria(&self, categoria: CategoriaManual) -> Result<Vec<Canal>, ErroDominio> {
+        let estado = self.estado();
+        let mut canais: Vec<Canal> = estado
+            .canais
+            .values()
+            .filter(|canal| {
+                estado
+                    .categoria_por_canal
+                    .get(&canal.id)
+                    .is_some_and(|categoria_canal| *categoria_canal == categoria)
+            })
+            .cloned()
+            .collect();
+        canais.sort_by(|a, b| {
+            a.nome
+                .cmp(&b.nome)
+                .then_with(|| a.id.as_str().cmp(b.id.as_str()))
+        });
+        Ok(canais)
     }
 
     fn guardar_video(&self, video: &Video) -> Result<(), ErroDominio> {

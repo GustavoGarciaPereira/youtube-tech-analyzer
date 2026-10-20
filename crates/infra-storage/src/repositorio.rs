@@ -11,6 +11,7 @@ use domain::entities::{
 use domain::errors::ErroDominio;
 use domain::ids::{CanalId, ComentarioId, VideoId};
 use domain::ports::{CacheDeClassificacoes, RepositorioDeCanais};
+use domain::value_objects::CategoriaManual;
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::Error;
@@ -125,6 +126,27 @@ WHERE v.canal_id = ?1
 GROUP BY c.nicho
 ORDER BY COUNT(*) DESC, c.nicho ASC
 LIMIT 1
+"#;
+
+const SELECT_CATEGORIA_MANUAL: &str = r#"
+SELECT categoria FROM canal_categoria_manual WHERE canal_id = ?1
+"#;
+
+const UPSERT_CATEGORIA_MANUAL: &str = r#"
+INSERT INTO canal_categoria_manual (canal_id, categoria, anotado_em)
+VALUES (?1, ?2, ?3)
+ON CONFLICT(canal_id) DO UPDATE SET
+    categoria = excluded.categoria,
+    anotado_em = excluded.anotado_em
+"#;
+
+const SELECT_CANAIS_POR_CATEGORIA: &str = r#"
+SELECT c.id, c.nome, c.handle, c.url, c.descricao, c.inscritos,
+       c.total_videos, c.topic_categories, c.criado_em
+FROM canais c
+INNER JOIN canal_categoria_manual cc ON cc.canal_id = c.id
+WHERE cc.categoria = ?1
+ORDER BY c.nome ASC, c.id ASC
 "#;
 
 const SELECT_VIDEOS_CANAL: &str = r#"
@@ -263,6 +285,62 @@ impl SqliteRepositorio {
         nicho
             .map(|valor| Nicho::try_from(valor.as_str()).map_err(Error::from))
             .transpose()
+    }
+
+    fn salvar_categoria_manual(
+        &self,
+        canal_id: &CanalId,
+        categoria: CategoriaManual,
+    ) -> Result<(), Error> {
+        let conexao = self.obter_conexao()?;
+        let existe: i64 = conexao.query_row(
+            "SELECT EXISTS(SELECT 1 FROM canais WHERE id = ?1)",
+            params![canal_id.as_str()],
+            |row| row.get(0),
+        )?;
+        if existe == 0 {
+            return Err(Error::Domain(ErroDominio::NaoEncontrado {
+                recurso: "canal",
+                id: canal_id.as_str().to_owned(),
+            }));
+        }
+
+        let anotado_em = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        conexao.execute(
+            UPSERT_CATEGORIA_MANUAL,
+            params![canal_id.as_str(), categoria.como_str(), anotado_em],
+        )?;
+        Ok(())
+    }
+
+    fn buscar_categoria_manual(
+        &self,
+        canal_id: &CanalId,
+    ) -> Result<Option<CategoriaManual>, Error> {
+        let conexao = self.obter_conexao()?;
+        let categoria: Option<String> = conexao
+            .query_row(SELECT_CATEGORIA_MANUAL, params![canal_id.as_str()], |row| {
+                row.get(0)
+            })
+            .optional()?;
+        categoria
+            .map(|valor| {
+                CategoriaManual::de_str(&valor).ok_or_else(|| {
+                    Error::InvalidData(format!("categoria manual inválida: {valor}"))
+                })
+            })
+            .transpose()
+    }
+
+    fn buscar_canais_por_categoria(&self, categoria: CategoriaManual) -> Result<Vec<Canal>, Error> {
+        let conexao = self.obter_conexao()?;
+        let mut stmt = conexao.prepare(SELECT_CANAIS_POR_CATEGORIA)?;
+        let mut rows = stmt.query(params![categoria.como_str()])?;
+        let mut canais = Vec::new();
+        while let Some(row) = rows.next()? {
+            canais.push(mapear_canal(row)?);
+        }
+        Ok(canais)
     }
 
     fn salvar_video(&self, video: &Video) -> Result<(), Error> {
@@ -502,6 +580,28 @@ impl RepositorioDeCanais for SqliteRepositorio {
 
     fn nicho_do_canal(&self, id: &CanalId) -> Result<Option<Nicho>, ErroDominio> {
         self.buscar_nicho_do_canal(id).map_err(ErroDominio::from)
+    }
+
+    fn definir_categoria_manual(
+        &self,
+        canal_id: &CanalId,
+        categoria: CategoriaManual,
+    ) -> Result<(), ErroDominio> {
+        self.salvar_categoria_manual(canal_id, categoria)
+            .map_err(ErroDominio::from)
+    }
+
+    fn categoria_manual_do_canal(
+        &self,
+        canal_id: &CanalId,
+    ) -> Result<Option<CategoriaManual>, ErroDominio> {
+        self.buscar_categoria_manual(canal_id)
+            .map_err(ErroDominio::from)
+    }
+
+    fn canais_por_categoria(&self, categoria: CategoriaManual) -> Result<Vec<Canal>, ErroDominio> {
+        self.buscar_canais_por_categoria(categoria)
+            .map_err(ErroDominio::from)
     }
 
     fn guardar_video(&self, video: &Video) -> Result<(), ErroDominio> {
@@ -782,8 +882,49 @@ fn inteiro(valor: u64, campo: &str) -> Result<i64, Error> {
 
 #[cfg(test)]
 mod tests {
-    use super::{aplicar_migracoes, coluna_existe};
-    use rusqlite::Connection;
+    use std::time::Duration;
+
+    use super::{SqliteRepositorio, aplicar_migracoes, coluna_existe};
+    use domain::ids::CanalId;
+    use domain::value_objects::CategoriaManual;
+    use rusqlite::{Connection, params};
+
+    #[test]
+    fn categoria_manual_atualiza_anotado_em() -> Result<(), Box<dyn std::error::Error>> {
+        let repo = SqliteRepositorio::em_memoria()?;
+        {
+            let conexao = repo.obter_conexao()?;
+            conexao.execute(
+                "INSERT INTO canais (id, nome, url, data_coleta)
+                 VALUES (?1, ?2, ?3, ?4)",
+                params!["canal-1", "Canal", "https://example.com", "2024-01-01"],
+            )?;
+        }
+
+        repo.salvar_categoria_manual(&CanalId::new("canal-1"), CategoriaManual::Programacao)?;
+        let primeira: String = {
+            let conexao = repo.obter_conexao()?;
+            conexao.query_row(
+                "SELECT anotado_em FROM canal_categoria_manual WHERE canal_id = ?1",
+                params!["canal-1"],
+                |row| row.get(0),
+            )?
+        };
+
+        std::thread::sleep(Duration::from_millis(5));
+        repo.salvar_categoria_manual(&CanalId::new("canal-1"), CategoriaManual::Tecnologia)?;
+        let segunda: String = {
+            let conexao = repo.obter_conexao()?;
+            conexao.query_row(
+                "SELECT anotado_em FROM canal_categoria_manual WHERE canal_id = ?1",
+                params!["canal-1"],
+                |row| row.get(0),
+            )?
+        };
+
+        assert_ne!(primeira, segunda);
+        Ok(())
+    }
 
     #[test]
     fn migracao_adiciona_colunas_em_tabela_existente() -> Result<(), Box<dyn std::error::Error>> {

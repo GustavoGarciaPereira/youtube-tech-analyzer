@@ -220,20 +220,18 @@ async fn gerar_relatorio(
         });
     }
 
-    let periodo_inicio = periodo_inicio.ok_or_else(|| {
-        ErroAplicacao::SemDados(format!(
-            "canal {} não tem séries utilizáveis para o relatório",
-            canal.id
-        ))
-    })?;
-    let periodo_fim = periodo_fim.ok_or_else(|| {
-        ErroAplicacao::SemDados(format!(
-            "canal {} não tem séries utilizáveis para o relatório",
-            canal.id
-        ))
-    })?;
+    if tendencias.is_empty() {
+        avisos
+            .push("amostra insuficiente para gerar tendências; ver avisos por métrica".to_owned());
+    }
 
-    let comparacoes = construir_comparacoes(&repositorio, &canal.id, &tendencias, &config)?;
+    // Sem tendências não há período real; usamos a data de geração para que o
+    // relatório ainda possa ser exportado com os avisos.
+    let periodo_inicio = periodo_inicio.unwrap_or_else(|| Utc::now().date_naive());
+    let periodo_fim = periodo_fim.unwrap_or(periodo_inicio);
+
+    let comparacoes =
+        construir_comparacoes(&repositorio, &canal.id, &tendencias, &config, &mut avisos)?;
 
     Ok(RelatorioCanal {
         canal,
@@ -253,25 +251,35 @@ fn construir_comparacoes(
     canal_id: &CanalId,
     tendencias: &[TendenciaMetrica],
     config: &RelatorioConfig,
+    avisos: &mut Vec<String>,
 ) -> Result<Vec<ComparacaoPares>, ErroAplicacao> {
-    let mut pares = repositorio.listar_canais()?;
-    pares.retain(|canal| &canal.id != canal_id);
+    let mut todos = repositorio.listar_canais()?;
+    todos.retain(|canal| &canal.id != canal_id);
 
-    let nicho_alvo = repositorio.nicho_do_canal(canal_id)?;
-    let mut grupo = "todos".to_owned();
-
-    if let Some(nicho) = nicho_alvo {
-        let mut filtrados = Vec::new();
-        for par in &pares {
-            if repositorio.nicho_do_canal(&par.id)? == Some(nicho) {
-                filtrados.push(par.clone());
+    // O baseline usa a categoria manual. `nicho_do_canal` fica reservado ao
+    // futuro classificador de nicho e não é consultado neste caminho.
+    let categoria = repositorio.categoria_manual_do_canal(canal_id)?;
+    let (pares, grupo) = match categoria {
+        Some(categoria) => {
+            let mut pares = repositorio.canais_por_categoria(categoria)?;
+            pares.retain(|canal| &canal.id != canal_id);
+            if pares.is_empty() {
+                avisos.push(format!(
+                    "sem pares na categoria '{}'; comparação feita contra todos os canais",
+                    categoria.como_str()
+                ));
+                (todos, "todos".to_owned())
+            } else {
+                (pares, format!("categoria:{}", categoria.como_str()))
             }
         }
-        if !filtrados.is_empty() {
-            pares = filtrados;
-            grupo = nicho.as_str().to_owned();
+        None => {
+            avisos.push(
+                "canal sem categoria manual; comparação feita contra todos os canais".to_owned(),
+            );
+            (todos, "todos".to_owned())
         }
-    }
+    };
 
     let mut comparacoes = Vec::new();
     for tendencia in tendencias {

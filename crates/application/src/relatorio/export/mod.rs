@@ -197,8 +197,10 @@ fn direcao_predominante(tendencias: &[&TendenciaMetrica]) -> &'static str {
 fn texto_comparacao(comparacao: &ComparacaoPares) -> String {
     let grupo = if comparacao.grupo == "todos" {
         "na base de dados".to_owned()
+    } else if let Some(categoria) = comparacao.grupo.strip_prefix("categoria:") {
+        format!("da categoria `{categoria}`")
     } else {
-        format!("do nicho `{}`", comparacao.grupo)
+        format!("do grupo `{}`", comparacao.grupo)
     };
     format!(
         "O slope do canal ({:.4}) situa-se no percentil {:.1} face a {} canais {}. Mediana dos pares: {:.4}.",

@@ -9,7 +9,7 @@
 
 /// Versão do schema SQLite. Incrementar quando `migrations/schema.sql`
 /// mudar de forma incompatível.
-pub const VERSAO_SCHEMA: &str = "2";
+pub const VERSAO_SCHEMA: &str = "3";
 
 mod error;
 mod mapeamento;

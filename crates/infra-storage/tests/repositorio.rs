@@ -1,7 +1,7 @@
 use domain::ports::RepositorioDeCanais;
 use domain::{
-    Canal, CanalId, ClassificacaoNicho, Comentario, ComentarioId, EntidadeTipo, Metrica, Nicho,
-    Snapshot, Video, VideoId,
+    Canal, CanalId, CategoriaManual, ClassificacaoNicho, Comentario, ComentarioId, EntidadeTipo,
+    ErroDominio, Metrica, Nicho, Snapshot, Video, VideoId,
 };
 use infra_storage::SqliteRepositorio;
 
@@ -125,6 +125,45 @@ fn comentarios_preservam_relacao_de_resposta() -> Resultado {
     assert!(resposta_lida.eh_resposta);
     assert_eq!(resposta_lida.nivel_resposta, 1);
     assert_eq!(resposta_lida.parent_id, resposta.parent_id);
+    Ok(())
+}
+
+#[test]
+fn categorias_manuais_sao_persistidas_e_filtradas() -> Resultado {
+    let repo = repositorio()?;
+    repo.guardar_canal(&canal("canal-1"))?;
+    repo.guardar_canal(&canal("canal-2"))?;
+    repo.guardar_canal(&canal("canal-3"))?;
+
+    assert_eq!(
+        repo.categoria_manual_do_canal(&CanalId::new("canal-1"))?,
+        None
+    );
+
+    repo.definir_categoria_manual(&CanalId::new("canal-1"), CategoriaManual::Programacao)?;
+    repo.definir_categoria_manual(&CanalId::new("canal-2"), CategoriaManual::Programacao)?;
+    repo.definir_categoria_manual(&CanalId::new("canal-3"), CategoriaManual::Tecnologia)?;
+
+    assert_eq!(
+        repo.categoria_manual_do_canal(&CanalId::new("canal-1"))?,
+        Some(CategoriaManual::Programacao)
+    );
+    assert_eq!(
+        repo.canais_por_categoria(CategoriaManual::Programacao)?
+            .len(),
+        2
+    );
+
+    repo.definir_categoria_manual(&CanalId::new("canal-1"), CategoriaManual::Outro)?;
+    assert_eq!(
+        repo.categoria_manual_do_canal(&CanalId::new("canal-1"))?,
+        Some(CategoriaManual::Outro)
+    );
+
+    let erro = repo
+        .definir_categoria_manual(&CanalId::new("canal-inexistente"), CategoriaManual::Outro)
+        .expect_err("canal inexistente");
+    assert!(matches!(erro, ErroDominio::NaoEncontrado { .. }));
     Ok(())
 }
 

@@ -10,6 +10,7 @@ pub mod entities;
 pub mod errors;
 pub mod ids;
 pub mod ports;
+pub mod value_objects;
 
 pub use canal_ref::CanalRef;
 pub use entities::{
@@ -20,3 +21,4 @@ pub use ids::{CanalId, ComentarioId, VideoId};
 pub use ports::{
     BoxFuture, CacheDeClassificacoes, ClassificadorDeNicho, ColetorDeCanal, RepositorioDeCanais,
 };
+pub use value_objects::CategoriaManual;

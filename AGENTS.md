@@ -29,7 +29,8 @@ apontam SEMPRE para dentro (em direção ao domínio).
 - **Testes**: `cargo test --workspace`
 - **Verificação de lints (obrigatório antes de terminar)**: `cargo clippy --workspace --all-targets -- -D warnings`
 - **Formatação**: `cargo fmt --all`
-- **Executar a app desktop**: `cargo run -p desktop`
+- **Executar a app desktop**: `cargo run -p desktop --bin desktop`
+- **Executar a CLI**: `cargo run -p desktop --bin yta -- --help`
 
 ## 4. Convenções de Código
 - **Edição**: 2024 (definida em `[workspace.package]`).

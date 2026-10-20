@@ -4,6 +4,7 @@ use crate::entities::{
 };
 use crate::errors::ErroDominio;
 use crate::ids::{CanalId, VideoId};
+use crate::value_objects::CategoriaManual;
 
 /// Porta de saída para persistência e consulta de dados.
 ///
@@ -25,6 +26,22 @@ pub trait RepositorioDeCanais: Send + Sync {
     /// Devolve o nicho predominante de um canal, calculado a partir das
     /// classificações dos seus vídeos.
     fn nicho_do_canal(&self, id: &CanalId) -> Result<Option<Nicho>, ErroDominio>;
+
+    /// Define ou substitui a categoria manual de um canal.
+    fn definir_categoria_manual(
+        &self,
+        canal_id: &CanalId,
+        categoria: CategoriaManual,
+    ) -> Result<(), ErroDominio>;
+
+    /// Obtém a categoria manual de um canal.
+    fn categoria_manual_do_canal(
+        &self,
+        canal_id: &CanalId,
+    ) -> Result<Option<CategoriaManual>, ErroDominio>;
+
+    /// Lista os canais de uma categoria manual.
+    fn canais_por_categoria(&self, categoria: CategoriaManual) -> Result<Vec<Canal>, ErroDominio>;
 
     /// Insere ou atualiza um vídeo.
     fn guardar_video(&self, video: &Video) -> Result<(), ErroDominio>;

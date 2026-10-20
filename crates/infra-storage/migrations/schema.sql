@@ -85,5 +85,14 @@ CREATE INDEX IF NOT EXISTS idx_videos_data_coleta ON videos(data_coleta);
 CREATE INDEX IF NOT EXISTS idx_comentarios_video_id ON comentarios(video_id);
 CREATE INDEX IF NOT EXISTS idx_snapshots_entidade_id ON snapshots(entidade_id);
 CREATE INDEX IF NOT EXISTS idx_snapshots_data_coleta ON snapshots(data_coleta);
+CREATE TABLE IF NOT EXISTS canal_categoria_manual (
+    canal_id TEXT PRIMARY KEY NOT NULL,
+    categoria TEXT NOT NULL,
+    -- ISO 8601 UTC com hora, para auditoria de alterações.
+    anotado_em TEXT NOT NULL,
+    FOREIGN KEY (canal_id) REFERENCES canais(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_classificacoes_nicho_nicho ON classificacoes_nicho(nicho);
 CREATE INDEX IF NOT EXISTS idx_classificacoes_cache_versao ON classificacoes_nicho_cache(versao_classificador);
+CREATE INDEX IF NOT EXISTS idx_canal_categoria_categoria ON canal_categoria_manual(categoria);
