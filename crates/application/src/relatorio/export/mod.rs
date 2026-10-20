@@ -35,7 +35,13 @@ pub fn para_markdown(relatorio: &RelatorioCanal) -> String {
         .collect();
     let total = relatorio.tendencias.len();
     let direcao = direcao_predominante(&significativas);
-    if significativas.is_empty() {
+    if total == 0 {
+        let _ = writeln!(
+            saida,
+            "No período de {} a {}, não foi possível analisar nenhuma métrica; ver a secção Avisos.",
+            relatorio.periodo_inicio, relatorio.periodo_fim
+        );
+    } else if significativas.is_empty() {
         let _ = writeln!(
             saida,
             "No período de {} a {}, nenhuma das {} métricas analisadas apresenta tendência estatisticamente significativa (MK, p<{} após FDR).",

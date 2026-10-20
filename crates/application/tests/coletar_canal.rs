@@ -5,7 +5,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use application::{ColetaConfig, ColetarCanalUseCase, ErroAplicacao, EventoProgresso};
+use chrono::{Days, Utc};
 use domain::CanalRef;
+use domain::entities::snapshot::{EntidadeTipo, Metrica, Snapshot};
 use domain::entities::{canal::Canal, comentario::Comentario, video::Video};
 use domain::ids::{CanalId, ComentarioId, VideoId};
 use domain::ports::{ColetorDeCanal, RepositorioDeCanais};
@@ -245,6 +247,108 @@ async fn video_sem_comentarios_tambem_e_marcado_como_coletado() {
         1,
         "o marcador deve existir mesmo com zero comentários"
     );
+}
+
+#[tokio::test]
+async fn metricas_continuam_a_ser_gravadas_no_dia_seguinte() {
+    let videos = vec![
+        video("v1", "2024-01-02T00:00:00Z"),
+        video("v2", "2024-01-01T00:00:00Z"),
+    ];
+    let fake = Arc::new(FakeColetor::novo(
+        canal(),
+        videos.clone(),
+        mapa_comentarios(&videos, 2),
+    ));
+    let repo = Arc::new(FakeRepositorio::new());
+    repo.guardar_canal(&canal()).expect("canal guardado");
+
+    let hoje = Utc::now().date_naive();
+    let ontem = (hoje - Days::new(1)).to_string();
+    let hoje = hoje.to_string();
+    repo.upsert_snapshots_batch(&[
+        Snapshot::novo(
+            EntidadeTipo::Video,
+            "v1",
+            Metrica::ComentariosColetados,
+            2,
+            ontem.clone(),
+        ),
+        Snapshot::novo(
+            EntidadeTipo::Video,
+            "v1",
+            Metrica::Visualizacoes,
+            100,
+            ontem.clone(),
+        ),
+    ])
+    .expect("marcadores antigos");
+
+    let coletor: Arc<dyn ColetorDeCanal> = fake.clone();
+    let repositorio: Arc<dyn RepositorioDeCanais> = repo.clone();
+    let use_case = criar_use_case(coletor, repositorio, ColetaConfig::default());
+
+    let relatorio = use_case
+        .executar(referencia(), None, CancellationToken::new())
+        .await
+        .expect("coleta do dia seguinte");
+
+    assert_eq!(relatorio.videos_ja_coletados, 1);
+    assert_eq!(relatorio.videos_novos, 1);
+    assert_eq!(fake.chamadas_comentarios(), 1);
+
+    let snapshots = repo.snapshots();
+    assert!(snapshots.iter().any(|snapshot| {
+        snapshot.entidade_tipo == EntidadeTipo::Video
+            && snapshot.entidade_id == "v1"
+            && snapshot.metrica == Metrica::Visualizacoes
+            && snapshot.data_coleta == hoje
+    }));
+    assert!(snapshots.iter().any(|snapshot| {
+        snapshot.entidade_tipo == EntidadeTipo::Video
+            && snapshot.entidade_id == "v1"
+            && snapshot.metrica == Metrica::Visualizacoes
+            && snapshot.data_coleta == ontem
+    }));
+}
+
+#[tokio::test]
+async fn recoletar_comentarios_forca_nova_busca() {
+    let videos = vec![video("v1", "2024-01-01T00:00:00Z")];
+    let fake = Arc::new(FakeColetor::novo(
+        canal(),
+        videos,
+        mapa_comentarios(&[video("v1", "2024-01-01T00:00:00Z")], 2),
+    ));
+    let repo = Arc::new(FakeRepositorio::new());
+    repo.guardar_canal(&canal()).expect("canal guardado");
+
+    let hoje = Utc::now().date_naive().to_string();
+    repo.upsert_snapshots_batch(&[Snapshot::novo(
+        EntidadeTipo::Video,
+        "v1",
+        Metrica::ComentariosColetados,
+        2,
+        hoje,
+    )])
+    .expect("marcador");
+
+    let coletor: Arc<dyn ColetorDeCanal> = fake.clone();
+    let repositorio: Arc<dyn RepositorioDeCanais> = repo;
+    let config = ColetaConfig {
+        recoletar_comentarios: true,
+        ..ColetaConfig::default()
+    };
+    let use_case = criar_use_case(coletor, repositorio, config);
+
+    let relatorio = use_case
+        .executar(referencia(), None, CancellationToken::new())
+        .await
+        .expect("refresh manual");
+
+    assert_eq!(relatorio.videos_ja_coletados, 0);
+    assert_eq!(relatorio.videos_novos, 1);
+    assert_eq!(fake.chamadas_comentarios(), 1);
 }
 
 #[tokio::test]

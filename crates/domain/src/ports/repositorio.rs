@@ -67,8 +67,15 @@ pub trait RepositorioDeCanais: Send + Sync {
     /// Regista várias observações de métricas numa única transação.
     fn upsert_snapshots_batch(&self, snapshots: &[Snapshot]) -> Result<(), ErroDominio>;
 
-    /// Indica se os comentários do vídeo já foram recolhidos hoje (UTC).
-    fn video_ja_coletado(&self, id: &VideoId) -> Result<bool, ErroDominio>;
+    /// Indica se os comentários do vídeo já foram recolhidos alguma vez,
+    /// independentemente da data.
+    fn comentarios_do_video_ja_coletados(&self, id: &VideoId) -> Result<bool, ErroDominio>;
+
+    /// Indica se as métricas do vídeo já foram registadas hoje (UTC).
+    ///
+    /// Serve apenas para evitar re-coletar no mesmo dia; no dia seguinte
+    /// deve devolver `false` e permitir novos snapshots.
+    fn video_metricas_hoje_ja_coletadas(&self, id: &VideoId) -> Result<bool, ErroDominio>;
 
     /// Lista as observações de métricas de um canal.
     fn listar_snapshots(&self, canal_id: &CanalId) -> Result<Vec<Snapshot>, ErroDominio>;

@@ -212,23 +212,67 @@ fn upsert_videos_batch_e_idempotente() -> Resultado {
 }
 
 #[test]
-fn video_ja_coletado_detecta_o_marcador_do_dia() -> Resultado {
+fn marcador_de_comentarios_e_one_time_independente_da_data() -> Resultado {
     let repo = repositorio()?;
-    let video_id = VideoId::new("video-1");
+    let video_sem_marcador = VideoId::new("video-sem-marcador");
+    let video_hoje = VideoId::new("video-hoje");
+    let video_ontem = VideoId::new("video-ontem");
 
-    assert!(!repo.video_ja_coletado(&video_id)?);
+    assert!(!repo.comentarios_do_video_ja_coletados(&video_sem_marcador)?);
 
-    let hoje = chrono::Utc::now().date_naive().to_string();
-    let marcador = Snapshot::novo(
-        EntidadeTipo::Video,
-        video_id.as_str(),
-        Metrica::ComentariosColetados,
-        2,
-        hoje,
-    );
-    repo.upsert_snapshots_batch(&[marcador])?;
+    let hoje = chrono::Utc::now().date_naive();
+    let ontem = (hoje - chrono::Days::new(1)).to_string();
+    let hoje = hoje.to_string();
+    repo.upsert_snapshots_batch(&[
+        Snapshot::novo(
+            EntidadeTipo::Video,
+            video_hoje.as_str(),
+            Metrica::ComentariosColetados,
+            2,
+            hoje,
+        ),
+        Snapshot::novo(
+            EntidadeTipo::Video,
+            video_ontem.as_str(),
+            Metrica::ComentariosColetados,
+            2,
+            ontem,
+        ),
+    ])?;
 
-    assert!(repo.video_ja_coletado(&video_id)?);
+    assert!(repo.comentarios_do_video_ja_coletados(&video_hoje)?);
+    assert!(repo.comentarios_do_video_ja_coletados(&video_ontem)?);
+    Ok(())
+}
+
+#[test]
+fn metricas_de_hoje_nao_incluem_ontem() -> Resultado {
+    let repo = repositorio()?;
+    let video_hoje = VideoId::new("video-hoje");
+    let video_ontem = VideoId::new("video-ontem");
+
+    let hoje = chrono::Utc::now().date_naive();
+    let ontem = (hoje - chrono::Days::new(1)).to_string();
+    let hoje = hoje.to_string();
+    repo.upsert_snapshots_batch(&[
+        Snapshot::novo(
+            EntidadeTipo::Video,
+            video_hoje.as_str(),
+            Metrica::Visualizacoes,
+            10,
+            hoje,
+        ),
+        Snapshot::novo(
+            EntidadeTipo::Video,
+            video_ontem.as_str(),
+            Metrica::Visualizacoes,
+            10,
+            ontem,
+        ),
+    ])?;
+
+    assert!(repo.video_metricas_hoje_ja_coletadas(&video_hoje)?);
+    assert!(!repo.video_metricas_hoje_ja_coletadas(&video_ontem)?);
     Ok(())
 }
 

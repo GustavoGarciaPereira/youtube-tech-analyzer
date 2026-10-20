@@ -16,11 +16,11 @@ pub struct FalhaVideo {
 pub struct RelatorioColeta {
     /// Canal resolvido.
     pub canal: Canal,
-    /// Vídeos efetivamente processados com sucesso.
+    /// Vídeos cujos comentários foram processados com sucesso.
     pub videos_novos: usize,
-    /// Vídeos ignorados por já terem sido coletados hoje.
+    /// Vídeos cujos comentários já tinham sido coletados anteriormente.
     pub videos_ja_coletados: usize,
-    /// Vídeos que falharam durante o processamento.
+    /// Vídeos cuja coleta de comentários falhou.
     pub videos_falhados: usize,
     /// Total de comentários persistidos com sucesso.
     pub comentarios_total: usize,

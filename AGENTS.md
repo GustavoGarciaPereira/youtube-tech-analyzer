@@ -113,3 +113,13 @@ o `hash_conteudo` tem de os incluir — senão há cache hits incorrectos.
   `(video_id, hash_conteudo, versao_classificador)`. Só evita re-chamar o
   LLM; nunca é lida pelo relatório.
 - Todo caso de uso que classifica escreve nas duas. Nunca só numa.
+
+## 14. Marcadores de idempotência: comentários vs métricas
+- `ComentariosColetados` (snapshots): one-time por vídeo, SEM data.
+  `comentarios_do_video_ja_coletados` verifica existência, não data.
+- `Visualizacoes`/`Curtidas`/`TotalComentarios` (snapshots): diários,
+  COM data UTC. A UNIQUE composta deduplica intra-dia; a série
+  acumula entre dias.
+- `video_metricas_hoje_ja_coletadas` (com data) só evita re-coletar
+  no mesmo dia — NUNCA bloqueia o dia seguinte.
+- A flag `--recoletar-comentarios` força refresh manual.

@@ -83,6 +83,9 @@ enum CanalComando {
         /// Profundidade de respostas a comentários.
         #[arg(long)]
         max_depth: Option<i32>,
+        /// Força a re-busca de comentários já coletados.
+        #[arg(long)]
+        recoletar_comentarios: bool,
     },
 }
 
@@ -93,6 +96,9 @@ enum CanaisComando {
         /// Limita aos N vídeos mais recentes de cada canal.
         #[arg(long)]
         max_videos: Option<usize>,
+        /// Força a re-busca de comentários já coletados.
+        #[arg(long)]
+        recoletar_comentarios: bool,
     },
 }
 
@@ -183,11 +189,13 @@ async fn executar_canal(comando: CanalComando, caminho: &Path) -> anyhow::Result
             referencia,
             max_videos,
             max_depth,
+            recoletar_comentarios,
         } => {
             let repositorio = wiring::abrir_repositorio(caminho)?;
             let coletor = wiring::montar_coletor(None, max_depth.unwrap_or(MAX_DEPTH_PADRAO))?;
             let config = ColetaConfig {
                 max_videos,
+                recoletar_comentarios,
                 ..ColetaConfig::default()
             };
             let caso = ColetarCanalUseCase::new(coletor, repositorio, config);
@@ -201,7 +209,10 @@ async fn executar_canal(comando: CanalComando, caminho: &Path) -> anyhow::Result
 
 async fn executar_canais(comando: CanaisComando, caminho: &Path) -> anyhow::Result<()> {
     match comando {
-        CanaisComando::ColetarTodos { max_videos } => {
+        CanaisComando::ColetarTodos {
+            max_videos,
+            recoletar_comentarios,
+        } => {
             let repositorio = wiring::abrir_repositorio(caminho)?;
             let coletor = wiring::montar_coletor(None, MAX_DEPTH_PADRAO)?;
             let canais = repositorio.listar_canais()?;
@@ -213,6 +224,7 @@ async fn executar_canais(comando: CanaisComando, caminho: &Path) -> anyhow::Resu
 
             let config = ColetaConfig {
                 max_videos,
+                recoletar_comentarios,
                 ..ColetaConfig::default()
             };
             let caso = ColetarCanalUseCase::new(coletor, repositorio, config);

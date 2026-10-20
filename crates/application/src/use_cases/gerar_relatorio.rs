@@ -255,6 +255,7 @@ fn construir_comparacoes(
 ) -> Result<Vec<ComparacaoPares>, ErroAplicacao> {
     let mut todos = repositorio.listar_canais()?;
     todos.retain(|canal| &canal.id != canal_id);
+    let ha_outros_canais = !todos.is_empty();
 
     // O baseline usa a categoria manual. `nicho_do_canal` fica reservado ao
     // futuro classificador de nicho e não é consultado neste caminho.
@@ -264,19 +265,28 @@ fn construir_comparacoes(
             let mut pares = repositorio.canais_por_categoria(categoria)?;
             pares.retain(|canal| &canal.id != canal_id);
             if pares.is_empty() {
-                avisos.push(format!(
-                    "sem pares na categoria '{}'; comparação feita contra todos os canais",
-                    categoria.como_str()
-                ));
+                if ha_outros_canais {
+                    avisos.push(format!(
+                        "sem pares na categoria '{}'; comparação feita contra todos os canais",
+                        categoria.como_str()
+                    ));
+                } else {
+                    avisos.push("não há outros canais na base de dados para comparação".to_owned());
+                }
                 (todos, "todos".to_owned())
             } else {
                 (pares, format!("categoria:{}", categoria.como_str()))
             }
         }
         None => {
-            avisos.push(
-                "canal sem categoria manual; comparação feita contra todos os canais".to_owned(),
-            );
+            if ha_outros_canais {
+                avisos.push(
+                    "canal sem categoria manual; comparação feita contra todos os canais"
+                        .to_owned(),
+                );
+            } else {
+                avisos.push("não há outros canais na base de dados para comparação".to_owned());
+            }
             (todos, "todos".to_owned())
         }
     };

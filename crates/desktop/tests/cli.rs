@@ -188,6 +188,20 @@ fn canal_adicionar_sem_api_key_falha_com_mensagem_clara() -> Result<(), Box<dyn 
 }
 
 #[test]
+fn ajuda_de_coleta_mostra_recoletar_comentarios() -> Result<(), Box<dyn Error>> {
+    let dir = TempDir::new()?;
+    let db = dir.path().join("yta.db");
+
+    let assert = yta(&db)
+        .args(["canal", "coletar", "--help"])
+        .assert()
+        .success();
+
+    assert!(stdout(&assert)?.contains("--recoletar-comentarios"));
+    Ok(())
+}
+
+#[test]
 fn relatorio_json_faz_round_trip() -> Result<(), Box<dyn Error>> {
     let dir = TempDir::new()?;
     let db = dir.path().join("yta.db");

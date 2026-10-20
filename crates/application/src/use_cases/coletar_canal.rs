@@ -92,20 +92,37 @@ impl ColetarCanalUseCase {
             },
         );
         self.repositorio.upsert_videos_batch(&videos)?;
+
+        // Métricas por vídeo: todos os dias, exceto re-execuções no mesmo dia.
+        let mut videos_metricas = Vec::new();
+        for video in &videos {
+            if !self
+                .repositorio
+                .video_metricas_hoje_ja_coletadas(&video.id)?
+            {
+                videos_metricas.push(video.clone());
+            }
+        }
         self.repositorio
-            .upsert_snapshots_batch(&snapshots_videos(&videos, &hoje)?)?;
+            .upsert_snapshots_batch(&snapshots_videos(&videos_metricas, &hoje)?)?;
         self.repositorio.upsert_snapshots_batch(&agregados_canal)?;
         verificar_cancelamento(&cancelamento)?;
 
-        let mut videos_restantes = Vec::with_capacity(videos.len());
-        let mut videos_ja_coletados = 0_usize;
-        for video in videos {
-            if self.config.apenas_nao_coletados && self.repositorio.video_ja_coletado(&video.id)? {
-                videos_ja_coletados += 1;
-            } else {
-                videos_restantes.push(video);
+        // Comentários: uma vez por vídeo, independentemente do dia.
+        let mut videos_restantes = Vec::new();
+        if self.config.recoletar_comentarios {
+            videos_restantes.extend(videos.iter().cloned());
+        } else {
+            for video in &videos {
+                if !self
+                    .repositorio
+                    .comentarios_do_video_ja_coletados(&video.id)?
+                {
+                    videos_restantes.push(video.clone());
+                }
             }
         }
+        let videos_ja_coletados = videos.len() - videos_restantes.len();
 
         let total = videos_restantes.len();
         let contexto = ContextoVideo {

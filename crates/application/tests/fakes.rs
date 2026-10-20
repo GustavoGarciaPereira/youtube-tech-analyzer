@@ -172,6 +172,12 @@ impl FakeRepositorio {
         self.estado().videos.len()
     }
 
+    /// Snapshots persistidos.
+    #[must_use]
+    pub fn snapshots(&self) -> Vec<Snapshot> {
+        self.estado().snapshots.clone()
+    }
+
     /// Define o nicho devolvido por `nicho_do_canal`.
     pub fn definir_nicho(&self, canal_id: CanalId, nicho: Nicho) {
         self.estado().nicho_por_canal.insert(canal_id, nicho);
@@ -321,12 +327,23 @@ impl RepositorioDeCanais for FakeRepositorio {
         Ok(())
     }
 
-    fn video_ja_coletado(&self, id: &VideoId) -> Result<bool, ErroDominio> {
-        let hoje = Utc::now().date_naive().to_string();
+    fn comentarios_do_video_ja_coletados(&self, id: &VideoId) -> Result<bool, ErroDominio> {
         Ok(self.estado().snapshots.iter().any(|snapshot| {
             snapshot.entidade_tipo == EntidadeTipo::Video
                 && snapshot.entidade_id == id.as_str()
                 && snapshot.metrica == Metrica::ComentariosColetados
+        }))
+    }
+
+    fn video_metricas_hoje_ja_coletadas(&self, id: &VideoId) -> Result<bool, ErroDominio> {
+        let hoje = Utc::now().date_naive().to_string();
+        Ok(self.estado().snapshots.iter().any(|snapshot| {
+            snapshot.entidade_tipo == EntidadeTipo::Video
+                && snapshot.entidade_id == id.as_str()
+                && matches!(
+                    snapshot.metrica,
+                    Metrica::Visualizacoes | Metrica::Curtidas | Metrica::TotalComentarios
+                )
                 && snapshot.data_coleta == hoje
         }))
     }

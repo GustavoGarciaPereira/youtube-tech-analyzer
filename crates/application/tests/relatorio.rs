@@ -135,7 +135,7 @@ async fn happy_path_gera_tres_tendencias_crescentes() {
         relatorio
             .avisos
             .iter()
-            .any(|aviso| aviso.contains("canal sem categoria manual")),
+            .any(|aviso| aviso.contains("não há outros canais na base de dados")),
         "avisos: {:?}",
         relatorio.avisos
     );
@@ -346,6 +346,30 @@ async fn categoria_sem_pares_faz_fallback_para_todos_e_avisa() {
             .avisos
             .iter()
             .any(|aviso| aviso.contains("sem pares na categoria 'programacao'"))
+    );
+}
+
+#[tokio::test]
+async fn sem_outros_canais_avisa_de_forma_distinta() {
+    let repo = Arc::new(FakeRepositorio::new());
+    repo.guardar_canal(&canal("canal-1", "Canal"))
+        .expect("canal guardado");
+    repo.upsert_snapshots_batch(&serie_linear("canal-1", Metrica::Visualizacoes, 30, 1, 10))
+        .expect("snapshots guardados");
+
+    let config = RelatorioConfig {
+        metricas: vec![Metrica::Visualizacoes],
+        ..RelatorioConfig::default()
+    };
+    let relatorio = executar(repo, config, "canal-1")
+        .await
+        .expect("relatório gerado");
+
+    assert!(
+        relatorio
+            .avisos
+            .iter()
+            .any(|aviso| aviso.contains("não há outros canais na base de dados"))
     );
 }
 

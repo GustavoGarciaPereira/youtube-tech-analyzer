@@ -419,7 +419,26 @@ impl SqliteRepositorio {
         Ok(())
     }
 
-    fn verificar_video_ja_coletado(&self, video_id: &VideoId) -> Result<bool, Error> {
+    fn verificar_comentarios_ja_coletados(&self, video_id: &VideoId) -> Result<bool, Error> {
+        let conexao = self.obter_conexao()?;
+        let existe: i64 = conexao.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM snapshots
+                WHERE entidade_tipo = ?1
+                  AND entidade_id = ?2
+                  AND metrica = ?3
+            )",
+            params![
+                EntidadeTipo::Video.as_str(),
+                video_id.as_str(),
+                Metrica::ComentariosColetados.as_str(),
+            ],
+            |row| row.get(0),
+        )?;
+        Ok(existe != 0)
+    }
+
+    fn verificar_metricas_hoje(&self, video_id: &VideoId) -> Result<bool, Error> {
         let conexao = self.obter_conexao()?;
         let hoje = chrono::Utc::now().date_naive().to_string();
         let existe: i64 = conexao.query_row(
@@ -427,13 +446,15 @@ impl SqliteRepositorio {
                 SELECT 1 FROM snapshots
                 WHERE entidade_tipo = ?1
                   AND entidade_id = ?2
-                  AND metrica = ?3
-                  AND data_coleta = ?4
+                  AND metrica IN (?3, ?4, ?5)
+                  AND data_coleta = ?6
             )",
             params![
                 EntidadeTipo::Video.as_str(),
                 video_id.as_str(),
-                Metrica::ComentariosColetados.as_str(),
+                Metrica::Visualizacoes.as_str(),
+                Metrica::Curtidas.as_str(),
+                Metrica::TotalComentarios.as_str(),
                 hoje,
             ],
             |row| row.get(0),
@@ -639,9 +660,13 @@ impl RepositorioDeCanais for SqliteRepositorio {
             .map_err(ErroDominio::from)
     }
 
-    fn video_ja_coletado(&self, id: &VideoId) -> Result<bool, ErroDominio> {
-        self.verificar_video_ja_coletado(id)
+    fn comentarios_do_video_ja_coletados(&self, id: &VideoId) -> Result<bool, ErroDominio> {
+        self.verificar_comentarios_ja_coletados(id)
             .map_err(ErroDominio::from)
+    }
+
+    fn video_metricas_hoje_ja_coletadas(&self, id: &VideoId) -> Result<bool, ErroDominio> {
+        self.verificar_metricas_hoje(id).map_err(ErroDominio::from)
     }
 
     fn listar_snapshots(&self, canal_id: &CanalId) -> Result<Vec<Snapshot>, ErroDominio> {
