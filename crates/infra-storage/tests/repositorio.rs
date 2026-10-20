@@ -1,6 +1,7 @@
 use domain::ports::RepositorioDeCanais;
 use domain::{
-    Canal, CanalId, ClassificacaoNicho, Comentario, EntidadeTipo, Metrica, Nicho, Snapshot, Video,
+    Canal, CanalId, ClassificacaoNicho, Comentario, ComentarioId, EntidadeTipo, Metrica, Nicho,
+    Snapshot, Video,
 };
 use infra_storage::SqliteRepositorio;
 
@@ -49,6 +50,9 @@ fn comentario(id: &str, video_id: &str) -> Comentario {
         texto: "Comentário".to_owned(),
         publicado_em: "2024-01-02T00:00:00Z".to_owned(),
         curtidas: 5,
+        eh_resposta: false,
+        nivel_resposta: 0,
+        parent_id: None,
     }
 }
 
@@ -91,6 +95,36 @@ fn inserir_mesmo_video_duas_vezes_nao_duplica_e_preserva_comentarios() -> Result
     assert_eq!(videos.len(), 1);
     assert_eq!(videos[0].titulo, "Título atualizado");
     assert_eq!(repo.listar_comentarios(&video.id)?.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn comentarios_preservam_relacao_de_resposta() -> Resultado {
+    let repo = repositorio()?;
+    let canal = canal("canal-1");
+    repo.guardar_canal(&canal)?;
+
+    let video = video("video-1", "canal-1", "2024-01-01T00:00:00Z");
+    repo.guardar_video(&video)?;
+
+    let principal = comentario("comentario-1", "video-1");
+    repo.guardar_comentario(&principal)?;
+
+    let mut resposta = comentario("comentario-2", "video-1");
+    resposta.eh_resposta = true;
+    resposta.nivel_resposta = 1;
+    resposta.parent_id = Some(ComentarioId::new("comentario-1"));
+    repo.guardar_comentario(&resposta)?;
+
+    let lidos = repo.listar_comentarios(&video.id)?;
+    assert_eq!(lidos.len(), 2);
+    let resposta_lida = lidos
+        .iter()
+        .find(|comentario| comentario.id == resposta.id)
+        .expect("resposta persistida");
+    assert!(resposta_lida.eh_resposta);
+    assert_eq!(resposta_lida.nivel_resposta, 1);
+    assert_eq!(resposta_lida.parent_id, resposta.parent_id);
     Ok(())
 }
 

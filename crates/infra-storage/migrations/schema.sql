@@ -37,6 +37,11 @@ CREATE TABLE IF NOT EXISTS comentarios (
     texto TEXT NOT NULL,
     curtidas INTEGER NOT NULL DEFAULT 0,
     publicado_em TEXT NOT NULL,
+    eh_resposta INTEGER NOT NULL DEFAULT 0,
+    nivel_resposta INTEGER NOT NULL DEFAULT 0,
+    -- Sem FK auto-referenciada: a ordem cronológica dos comentários pode
+    -- colocar uma resposta antes do pai durante a inserção.
+    parent_id TEXT,
     data_coleta TEXT NOT NULL,
     FOREIGN KEY (video_id) REFERENCES videos(id) ON DELETE CASCADE
 );

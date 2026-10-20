@@ -49,6 +49,9 @@ pub(crate) fn mapear_comentario(row: &Row<'_>) -> Result<Comentario, Error> {
         texto: row.get(3)?,
         publicado_em: row.get(4)?,
         curtidas: ler_u64(row, 5)?,
+        eh_resposta: row.get::<_, i64>(6)? != 0,
+        nivel_resposta: ler_u32(row, 7)?,
+        parent_id: row.get::<_, Option<String>>(8)?.map(ComentarioId::new),
     })
 }
 

@@ -8,7 +8,7 @@ use domain::entities::{
     video::Video,
 };
 use domain::errors::ErroDominio;
-use domain::ids::{CanalId, VideoId};
+use domain::ids::{CanalId, ComentarioId, VideoId};
 use domain::ports::RepositorioDeCanais;
 use rusqlite::{Connection, params};
 
@@ -65,9 +65,10 @@ ON CONFLICT(id) DO UPDATE SET
 
 const UPSERT_COMENTARIO: &str = r#"
 INSERT INTO comentarios (
-    id, video_id, autor, texto, publicado_em, curtidas, data_coleta
+    id, video_id, autor, texto, publicado_em, curtidas,
+    eh_resposta, nivel_resposta, parent_id, data_coleta
 ) VALUES (
-    ?1, ?2, ?3, ?4, ?5, ?6,
+    ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9,
     strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
 )
 ON CONFLICT(id) DO UPDATE SET
@@ -76,6 +77,9 @@ ON CONFLICT(id) DO UPDATE SET
     texto = excluded.texto,
     publicado_em = excluded.publicado_em,
     curtidas = excluded.curtidas,
+    eh_resposta = excluded.eh_resposta,
+    nivel_resposta = excluded.nivel_resposta,
+    parent_id = excluded.parent_id,
     data_coleta = excluded.data_coleta
 "#;
 
@@ -114,7 +118,8 @@ ORDER BY publicado_em ASC, id ASC
 "#;
 
 const SELECT_COMENTARIOS_VIDEO: &str = r#"
-SELECT id, video_id, autor, texto, publicado_em, curtidas
+SELECT id, video_id, autor, texto, publicado_em, curtidas,
+       eh_resposta, nivel_resposta, parent_id
 FROM comentarios
 WHERE video_id = ?1
 ORDER BY publicado_em ASC, id ASC
@@ -165,6 +170,7 @@ impl SqliteRepositorio {
         tracing::debug!(caminho, "a abrir base de dados SQLite");
         let conexao = Connection::open(caminho)?;
         conexao.execute_batch(SCHEMA)?;
+        aplicar_migracoes(&conexao)?;
         Ok(Self {
             conexao: Mutex::new(conexao),
         })
@@ -255,6 +261,9 @@ impl SqliteRepositorio {
                 comentario.texto,
                 comentario.publicado_em,
                 inteiro(comentario.curtidas, "curtidas")?,
+                comentario.eh_resposta,
+                i64::from(comentario.nivel_resposta),
+                comentario.parent_id.as_ref().map(ComentarioId::as_str),
             ],
         )?;
         Ok(())
@@ -429,7 +438,83 @@ impl RepositorioDeCanais for SqliteRepositorio {
     }
 }
 
+fn aplicar_migracoes(conexao: &Connection) -> Result<(), Error> {
+    adicionar_coluna_se_ausente(
+        conexao,
+        "comentarios",
+        "eh_resposta",
+        "ALTER TABLE comentarios ADD COLUMN eh_resposta INTEGER NOT NULL DEFAULT 0",
+    )?;
+    adicionar_coluna_se_ausente(
+        conexao,
+        "comentarios",
+        "nivel_resposta",
+        "ALTER TABLE comentarios ADD COLUMN nivel_resposta INTEGER NOT NULL DEFAULT 0",
+    )?;
+    adicionar_coluna_se_ausente(
+        conexao,
+        "comentarios",
+        "parent_id",
+        "ALTER TABLE comentarios ADD COLUMN parent_id TEXT",
+    )?;
+    Ok(())
+}
+
+fn adicionar_coluna_se_ausente(
+    conexao: &Connection,
+    tabela: &str,
+    coluna: &str,
+    sql: &str,
+) -> Result<(), Error> {
+    if !coluna_existe(conexao, tabela, coluna)? {
+        conexao.execute_batch(sql)?;
+        tracing::debug!(tabela, coluna, "coluna adicionada por migração");
+    }
+    Ok(())
+}
+
+fn coluna_existe(conexao: &Connection, tabela: &str, coluna: &str) -> Result<bool, Error> {
+    let mut stmt = conexao.prepare(&format!("PRAGMA table_info({tabela})"))?;
+    let mut rows = stmt.query([])?;
+    while let Some(row) = rows.next()? {
+        let nome: String = row.get(1)?;
+        if nome == coluna {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn inteiro(valor: u64, campo: &str) -> Result<i64, Error> {
     i64::try_from(valor)
         .map_err(|_| Error::InvalidData(format!("{campo} excede o limite de i64: {valor}")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{aplicar_migracoes, coluna_existe};
+    use rusqlite::Connection;
+
+    #[test]
+    fn migracao_adiciona_colunas_em_tabela_existente() -> Result<(), Box<dyn std::error::Error>> {
+        let conexao = Connection::open_in_memory()?;
+        conexao.execute_batch(
+            "CREATE TABLE comentarios (
+                id TEXT PRIMARY KEY NOT NULL,
+                video_id TEXT NOT NULL,
+                autor TEXT NOT NULL,
+                texto TEXT NOT NULL,
+                curtidas INTEGER NOT NULL DEFAULT 0,
+                publicado_em TEXT NOT NULL,
+                data_coleta TEXT NOT NULL
+            );",
+        )?;
+
+        aplicar_migracoes(&conexao)?;
+
+        assert!(coluna_existe(&conexao, "comentarios", "eh_resposta")?);
+        assert!(coluna_existe(&conexao, "comentarios", "nivel_resposta")?);
+        assert!(coluna_existe(&conexao, "comentarios", "parent_id")?);
+        Ok(())
+    }
 }
