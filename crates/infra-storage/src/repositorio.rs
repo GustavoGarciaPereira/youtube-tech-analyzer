@@ -1,5 +1,6 @@
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
+use domain::BoxFuture;
 use domain::entities::{
     canal::Canal,
     comentario::Comentario,
@@ -9,12 +10,13 @@ use domain::entities::{
 };
 use domain::errors::ErroDominio;
 use domain::ids::{CanalId, ComentarioId, VideoId};
-use domain::ports::RepositorioDeCanais;
+use domain::ports::{CacheDeClassificacoes, RepositorioDeCanais};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::Error;
 use crate::mapeamento::{
-    mapear_canal, mapear_classificacao, mapear_comentario, mapear_snapshot, mapear_video,
+    mapear_canal, mapear_classificacao, mapear_classificacao_cache, mapear_comentario,
+    mapear_snapshot, mapear_video,
 };
 
 const SCHEMA: &str = include_str!("../migrations/schema.sql");
@@ -162,6 +164,29 @@ FROM classificacoes_nicho
 WHERE video_id = ?1
 "#;
 
+const SELECT_CACHE_CLASSIFICACAO: &str = r#"
+SELECT video_id, nicho, confianca, metodo, data_classificacao
+FROM classificacoes_nicho_cache
+WHERE video_id = ?1 AND hash_conteudo = ?2 AND versao_classificador = ?3
+"#;
+
+const UPSERT_CACHE_CLASSIFICACAO: &str = r#"
+INSERT INTO classificacoes_nicho_cache (
+    video_id, hash_conteudo, versao_classificador, nicho, confianca,
+    metodo, data_classificacao
+) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+ON CONFLICT(video_id, hash_conteudo, versao_classificador) DO UPDATE SET
+    nicho = excluded.nicho,
+    confianca = excluded.confianca,
+    metodo = excluded.metodo,
+    data_classificacao = excluded.data_classificacao
+"#;
+
+const SELECT_CACHE_CONTAGEM: &str = r#"
+SELECT COUNT(*) FROM classificacoes_nicho_cache
+WHERE versao_classificador = ?1
+"#;
+
 const SELECT_VIDEOS_POR_NICHO: &str = r#"
 SELECT v.id, v.canal_id, v.titulo, v.descricao, v.url, v.tags,
        v.topic_categories, v.publicado_em, v.duracao_segundos,
@@ -177,8 +202,9 @@ ORDER BY v.publicado_em DESC, v.id ASC
 /// A conexão é aberta uma única vez e reutilizada. O schema é aplicado no
 /// arranque com `CREATE TABLE IF NOT EXISTS`, pelo que abrir a mesma base de
 /// dados várias vezes é seguro.
+#[derive(Clone)]
 pub struct SqliteRepositorio {
-    conexao: Mutex<Connection>,
+    conexao: Arc<Mutex<Connection>>,
 }
 
 impl SqliteRepositorio {
@@ -189,7 +215,7 @@ impl SqliteRepositorio {
         conexao.execute_batch(SCHEMA)?;
         aplicar_migracoes(&conexao)?;
         Ok(Self {
-            conexao: Mutex::new(conexao),
+            conexao: Arc::new(Mutex::new(conexao)),
         })
     }
 
@@ -396,6 +422,59 @@ impl SqliteRepositorio {
         }
     }
 
+    fn buscar_classificacao_cache(
+        &self,
+        video_id: &VideoId,
+        hash_conteudo: &str,
+        versao_classificador: &str,
+    ) -> Result<Option<ClassificacaoNicho>, Error> {
+        let conexao = self.obter_conexao()?;
+        let mut stmt = conexao.prepare(SELECT_CACHE_CLASSIFICACAO)?;
+        let mut rows = stmt.query(params![
+            video_id.as_str(),
+            hash_conteudo,
+            versao_classificador
+        ])?;
+        match rows.next()? {
+            Some(row) => Ok(Some(mapear_classificacao_cache(row)?)),
+            None => Ok(None),
+        }
+    }
+
+    fn gravar_classificacao_cache(
+        &self,
+        video_id: &VideoId,
+        hash_conteudo: &str,
+        versao_classificador: &str,
+        classificacao: &ClassificacaoNicho,
+    ) -> Result<(), Error> {
+        let conexao = self.obter_conexao()?;
+        conexao.execute(
+            UPSERT_CACHE_CLASSIFICACAO,
+            params![
+                video_id.as_str(),
+                hash_conteudo,
+                versao_classificador,
+                classificacao.nicho.as_str(),
+                f64::from(classificacao.confianca),
+                classificacao.metodo,
+                classificacao.data_classificacao,
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn contar_classificacoes_cache(&self, versao_classificador: &str) -> Result<usize, Error> {
+        let conexao = self.obter_conexao()?;
+        let total: i64 = conexao.query_row(
+            SELECT_CACHE_CONTAGEM,
+            params![versao_classificador],
+            |row| row.get(0),
+        )?;
+        usize::try_from(total)
+            .map_err(|_| Error::InvalidData(format!("contagem de cache inválida: {total}")))
+    }
+
     fn buscar_videos_por_nicho(&self, nicho: Nicho) -> Result<Vec<Video>, Error> {
         let conexao = self.obter_conexao()?;
         let mut stmt = conexao.prepare(SELECT_VIDEOS_POR_NICHO)?;
@@ -495,6 +574,74 @@ impl RepositorioDeCanais for SqliteRepositorio {
     fn listar_videos_por_nicho(&self, nicho: Nicho) -> Result<Vec<Video>, ErroDominio> {
         self.buscar_videos_por_nicho(nicho)
             .map_err(ErroDominio::from)
+    }
+}
+
+impl CacheDeClassificacoes for SqliteRepositorio {
+    fn obter<'a>(
+        &'a self,
+        video_id: &'a VideoId,
+        hash_conteudo: &'a str,
+        versao_classificador: &'a str,
+    ) -> BoxFuture<'a, Result<Option<ClassificacaoNicho>, ErroDominio>> {
+        let this = self.clone();
+        let video_id = video_id.clone();
+        let hash_conteudo = hash_conteudo.to_owned();
+        let versao_classificador = versao_classificador.to_owned();
+
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                this.buscar_classificacao_cache(&video_id, &hash_conteudo, &versao_classificador)
+            })
+            .await
+            .map_err(|erro| ErroDominio::Repositorio(format!("tarefa de cache falhou: {erro}")))?
+            .map_err(ErroDominio::from)
+        })
+    }
+
+    fn gravar<'a>(
+        &'a self,
+        video_id: &'a VideoId,
+        hash_conteudo: &'a str,
+        versao_classificador: &'a str,
+        classificacao: &'a ClassificacaoNicho,
+    ) -> BoxFuture<'a, Result<(), ErroDominio>> {
+        let this = self.clone();
+        let video_id = video_id.clone();
+        let hash_conteudo = hash_conteudo.to_owned();
+        let versao_classificador = versao_classificador.to_owned();
+        let classificacao = classificacao.clone();
+
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                this.gravar_classificacao_cache(
+                    &video_id,
+                    &hash_conteudo,
+                    &versao_classificador,
+                    &classificacao,
+                )
+            })
+            .await
+            .map_err(|erro| ErroDominio::Repositorio(format!("tarefa de cache falhou: {erro}")))?
+            .map_err(ErroDominio::from)
+        })
+    }
+
+    fn contar_por_versao<'a>(
+        &'a self,
+        versao_classificador: &'a str,
+    ) -> BoxFuture<'a, Result<usize, ErroDominio>> {
+        let this = self.clone();
+        let versao_classificador = versao_classificador.to_owned();
+
+        Box::pin(async move {
+            tokio::task::spawn_blocking(move || {
+                this.contar_classificacoes_cache(&versao_classificador)
+            })
+            .await
+            .map_err(|erro| ErroDominio::Repositorio(format!("tarefa de cache falhou: {erro}")))?
+            .map_err(ErroDominio::from)
+        })
     }
 }
 

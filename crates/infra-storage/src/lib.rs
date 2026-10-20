@@ -9,7 +9,7 @@
 
 /// Versão do schema SQLite. Incrementar quando `migrations/schema.sql`
 /// mudar de forma incompatível.
-pub const VERSAO_SCHEMA: &str = "1";
+pub const VERSAO_SCHEMA: &str = "2";
 
 mod error;
 mod mapeamento;
@@ -17,3 +17,6 @@ mod repositorio;
 
 pub use error::Error;
 pub use repositorio::SqliteRepositorio;
+
+/// Alias explícito para usar o repositório como cache de classificações.
+pub type SqliteCacheDeClassificacoes = SqliteRepositorio;

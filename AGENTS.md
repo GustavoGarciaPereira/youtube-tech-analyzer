@@ -81,6 +81,10 @@ text
   object-safe e permitirem `Arc<dyn ...>` nos casos de uso.
 - `CanalRef` é um value object de `domain`; o parsing de URLs/handles fica em
   `infra-youtube`, porque depende de `reqwest::Url`.
+- `CacheDeClassificacoes` é uma porta separada em `domain`: `infra-ai` recebe
+  `Arc<dyn CacheDeClassificacoes>` e não depende de `infra-storage`. O cache
+  usa a tabela `classificacoes_nicho_cache`; a tabela canónica
+  `classificacoes_nicho` mantém-se para relatórios e `nicho_do_canal`.
 
 ## 8. SQLite: DELETE/REPLACE e CASCADE
 Nunca usar `INSERT OR REPLACE` em tabelas com `ON DELETE CASCADE`. O `REPLACE`

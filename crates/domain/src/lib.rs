@@ -17,4 +17,6 @@ pub use entities::{
 };
 pub use errors::ErroDominio;
 pub use ids::{CanalId, ComentarioId, VideoId};
-pub use ports::{ClassificadorDeNicho, ColetorDeCanal, RepositorioDeCanais};
+pub use ports::{
+    BoxFuture, CacheDeClassificacoes, ClassificadorDeNicho, ColetorDeCanal, RepositorioDeCanais,
+};

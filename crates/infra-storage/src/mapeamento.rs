@@ -75,6 +75,18 @@ pub(crate) fn mapear_classificacao(row: &Row<'_>) -> Result<ClassificacaoNicho, 
     })
 }
 
+pub(crate) fn mapear_classificacao_cache(row: &Row<'_>) -> Result<ClassificacaoNicho, Error> {
+    Ok(ClassificacaoNicho {
+        video_id: VideoId::new(row.get::<_, String>(0)?),
+        nicho: ler_nicho(row, 1)?,
+        confianca: ler_confianca(row, 2)?,
+        metodo: row
+            .get::<_, Option<String>>(3)?
+            .unwrap_or_else(|| "desconhecido".to_owned()),
+        data_classificacao: row.get(4)?,
+    })
+}
+
 fn ler_lista_json(row: &Row<'_>, indice: usize) -> Result<Vec<String>, Error> {
     let texto: Option<String> = row.get(indice)?;
     match texto.as_deref() {
