@@ -5,11 +5,13 @@
 
 #![forbid(unsafe_code)]
 
+pub mod canal_ref;
 pub mod entities;
 pub mod errors;
 pub mod ids;
 pub mod ports;
 
+pub use canal_ref::CanalRef;
 pub use entities::{
     Canal, ClassificacaoNicho, Comentario, EntidadeTipo, Metrica, Nicho, Snapshot, Video,
 };

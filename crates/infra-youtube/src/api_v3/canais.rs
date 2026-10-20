@@ -1,3 +1,4 @@
+use domain::CanalRef;
 use domain::entities::canal::Canal;
 use domain::ids::CanalId;
 
@@ -5,18 +6,16 @@ use super::client::ApiV3Client;
 use super::dto::{ChannelItem, ContentDetails, ListResponse};
 use super::{data_rfc3339, numero_u64, texto_opcional};
 use crate::errors::ColetaError;
-use crate::url::CanalRef;
 
 const PART_CANAL: &str = "snippet,statistics,topicDetails,contentDetails";
 
 pub(crate) async fn resolver_canal(
     client: &ApiV3Client,
-    referencia: &str,
+    canal_ref: &CanalRef,
 ) -> Result<(Canal, String), ColetaError> {
-    let canal_ref = CanalRef::parse(referencia)?;
     let consulta;
     let mut parametros = vec![("part", PART_CANAL)];
-    match &canal_ref {
+    match canal_ref {
         CanalRef::Handle(handle) => {
             consulta = format!("@{handle}");
             parametros.push(("forHandle", consulta.as_str()));
@@ -115,6 +114,7 @@ fn extrair_uploads(content_details: Option<ContentDetails>) -> Result<String, Co
 
 #[cfg(test)]
 mod tests {
+    use domain::CanalRef;
     use serde_json::json;
     use wiremock::matchers::{method, path, query_param};
     use wiremock::{Mock, MockServer, ResponseTemplate};
@@ -155,9 +155,10 @@ mod tests {
             .await;
 
         let coletor = coletor(&servidor, 2);
-        let (canal, uploads) = resolver_canal(coletor.client(), "@canal")
-            .await
-            .expect("canal resolvido");
+        let (canal, uploads) =
+            resolver_canal(coletor.client(), &CanalRef::Handle("canal".to_owned()))
+                .await
+                .expect("canal resolvido");
 
         assert_eq!(canal.id.as_str(), "UC1234567890123456789012");
         assert_eq!(canal.nome, "Canal de Tecnologia");

@@ -42,7 +42,10 @@ apontam SEMPRE para dentro (em direção ao domínio).
   `ON DELETE CASCADE` e apagar linhas filhas. `snapshots` usa
   `ON CONFLICT DO NOTHING` na chave composta
   (`entidade_tipo`, `entidade_id`, `metrica`, `data_coleta`); o histórico
-  preserva uma linha por dia e por métrica.
+  preserva uma linha por dia e por métrica. `data_coleta` usa `YYYY-MM-DD`
+  em UTC. O marcador `Metrica::ComentariosColetados` (`entidade_tipo=video`)
+  é a chave de `video_ja_coletado`; as métricas de visualizações/curtidas não
+  indicam que os comentários já foram recolhidos.
 - **Sem `unwrap()`/`expect()`** em código de produção. Use `?` e `Result`.
 
 ## 5. Estrutura de Ficheiros (resumo)
@@ -71,3 +74,10 @@ text
 - `opencode.json` usa o schema V2: `permissions` é uma **lista ordenada** de
   regras (`{ "action", "resource", "effect" }`), não um objeto chave-valor.
   Não regredir para a sintaxe V1.
+- `comentarios.parent_id` não tem FK auto-referenciada: a ordem cronológica
+  pode inserir uma resposta antes do comentário pai. Não "corrigir" isto sem
+  mudar a estratégia de inserção.
+- `ColetorDeCanal` e `ClassificadorDeNicho` devolvem futures boxed para serem
+  object-safe e permitirem `Arc<dyn ...>` nos casos de uso.
+- `CanalRef` é um value object de `domain`; o parsing de URLs/handles fica em
+  `infra-youtube`, porque depende de `reqwest::Url`.

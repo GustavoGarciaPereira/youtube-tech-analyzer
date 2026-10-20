@@ -1,7 +1,7 @@
 use domain::ports::RepositorioDeCanais;
 use domain::{
     Canal, CanalId, ClassificacaoNicho, Comentario, ComentarioId, EntidadeTipo, Metrica, Nicho,
-    Snapshot, Video,
+    Snapshot, Video, VideoId,
 };
 use infra_storage::SqliteRepositorio;
 
@@ -129,6 +129,46 @@ fn comentarios_preservam_relacao_de_resposta() -> Resultado {
 }
 
 #[test]
+fn upsert_videos_batch_e_idempotente() -> Resultado {
+    let repo = repositorio()?;
+    let canal = canal("canal-1");
+    repo.guardar_canal(&canal)?;
+
+    let videos = vec![
+        video("video-1", "canal-1", "2024-01-01T00:00:00Z"),
+        video("video-2", "canal-1", "2024-01-02T00:00:00Z"),
+        video("video-3", "canal-1", "2024-01-03T00:00:00Z"),
+    ];
+    repo.upsert_videos_batch(&videos)?;
+    assert_eq!(repo.listar_videos(&canal.id)?.len(), 3);
+
+    repo.upsert_videos_batch(&videos)?;
+    assert_eq!(repo.listar_videos(&canal.id)?.len(), 3);
+    Ok(())
+}
+
+#[test]
+fn video_ja_coletado_detecta_o_marcador_do_dia() -> Resultado {
+    let repo = repositorio()?;
+    let video_id = VideoId::new("video-1");
+
+    assert!(!repo.video_ja_coletado(&video_id)?);
+
+    let hoje = chrono::Utc::now().date_naive().to_string();
+    let marcador = Snapshot::novo(
+        EntidadeTipo::Video,
+        video_id.as_str(),
+        Metrica::ComentariosColetados,
+        2,
+        hoje,
+    );
+    repo.upsert_snapshots_batch(&[marcador])?;
+
+    assert!(repo.video_ja_coletado(&video_id)?);
+    Ok(())
+}
+
+#[test]
 fn snapshots_deduplicam_no_mesmo_dia_e_preservam_dias_diferentes() -> Resultado {
     let repo = repositorio()?;
     let canal_id = CanalId::new("canal-1");
@@ -142,9 +182,9 @@ fn snapshots_deduplicam_no_mesmo_dia_e_preservam_dias_diferentes() -> Resultado 
         )
     };
 
-    repo.guardar_snapshot(&snapshot("2024-01-01T00:00:00Z", 100))?;
-    repo.guardar_snapshot(&snapshot("2024-01-01T00:00:00Z", 999))?;
-    repo.guardar_snapshot(&snapshot("2024-01-02T00:00:00Z", 200))?;
+    repo.guardar_snapshot(&snapshot("2024-01-01", 100))?;
+    repo.guardar_snapshot(&snapshot("2024-01-01", 999))?;
+    repo.guardar_snapshot(&snapshot("2024-01-02", 200))?;
 
     let serie = repo.listar_serie_temporal(EntidadeTipo::Canal, "canal-1", Metrica::Inscritos)?;
     assert_eq!(serie.len(), 2);

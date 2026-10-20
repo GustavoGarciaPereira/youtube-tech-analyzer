@@ -36,7 +36,13 @@ dependencies = [
 name = "application"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "domain",
+ "thiserror",
+ "tokio",
+ "tokio-test",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -725,6 +731,7 @@ dependencies = [
 name = "infra-storage"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "domain",
  "rusqlite",
  "serde_json",
@@ -1542,6 +1549,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "libc",
  "pin-project-lite",
  "tokio",

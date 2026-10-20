@@ -22,17 +22,29 @@ pub trait RepositorioDeCanais: Send + Sync {
     /// Insere ou atualiza um vídeo.
     fn guardar_video(&self, video: &Video) -> Result<(), ErroDominio>;
 
+    /// Insere ou atualiza vários vídeos numa única transação.
+    fn upsert_videos_batch(&self, videos: &[Video]) -> Result<(), ErroDominio>;
+
     /// Lista os vídeos de um canal, ordenados por data de publicação.
     fn listar_videos(&self, canal_id: &CanalId) -> Result<Vec<Video>, ErroDominio>;
 
     /// Insere ou atualiza um comentário.
     fn guardar_comentario(&self, comentario: &Comentario) -> Result<(), ErroDominio>;
 
+    /// Insere ou atualiza vários comentários numa única transação.
+    fn upsert_comentarios_batch(&self, comentarios: &[Comentario]) -> Result<(), ErroDominio>;
+
     /// Lista os comentários de um vídeo, ordenados por data de publicação.
     fn listar_comentarios(&self, video_id: &VideoId) -> Result<Vec<Comentario>, ErroDominio>;
 
     /// Regista uma observação de métrica.
     fn guardar_snapshot(&self, snapshot: &Snapshot) -> Result<(), ErroDominio>;
+
+    /// Regista várias observações de métricas numa única transação.
+    fn upsert_snapshots_batch(&self, snapshots: &[Snapshot]) -> Result<(), ErroDominio>;
+
+    /// Indica se os comentários do vídeo já foram recolhidos hoje (UTC).
+    fn video_ja_coletado(&self, id: &VideoId) -> Result<bool, ErroDominio>;
 
     /// Lista as observações de métricas de um canal.
     fn listar_snapshots(&self, canal_id: &CanalId) -> Result<Vec<Snapshot>, ErroDominio>;

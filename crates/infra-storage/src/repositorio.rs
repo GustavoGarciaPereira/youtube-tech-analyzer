@@ -187,22 +187,7 @@ impl SqliteRepositorio {
 
     fn salvar_canal(&self, canal: &Canal) -> Result<(), Error> {
         let conexao = self.obter_conexao()?;
-        let topic_categories = serde_json::to_string(&canal.topic_categories)?;
-        conexao.execute(
-            UPSERT_CANAL,
-            params![
-                canal.id.as_str(),
-                canal.nome,
-                canal.handle,
-                canal.url,
-                canal.descricao,
-                inteiro(canal.inscritos, "inscritos")?,
-                inteiro(canal.total_videos, "total_videos")?,
-                topic_categories,
-                canal.criado_em,
-            ],
-        )?;
-        Ok(())
+        inserir_canal(&conexao, canal)
     }
 
     fn buscar_canal(&self, id: &CanalId) -> Result<Option<Canal>, Error> {
@@ -217,25 +202,19 @@ impl SqliteRepositorio {
 
     fn salvar_video(&self, video: &Video) -> Result<(), Error> {
         let conexao = self.obter_conexao()?;
-        let tags = serde_json::to_string(&video.tags)?;
-        let topic_categories = serde_json::to_string(&video.topic_categories)?;
-        conexao.execute(
-            UPSERT_VIDEO,
-            params![
-                video.id.as_str(),
-                video.canal_id.as_str(),
-                video.titulo,
-                video.descricao,
-                video.url,
-                tags,
-                topic_categories,
-                video.publicado_em,
-                i64::from(video.duracao_segundos),
-                inteiro(video.visualizacoes, "visualizacoes")?,
-                inteiro(video.curtidas, "curtidas")?,
-                inteiro(video.total_comentarios, "total_comentarios")?,
-            ],
-        )?;
+        inserir_video(&conexao, video)
+    }
+
+    fn salvar_videos_batch(&self, videos: &[Video]) -> Result<(), Error> {
+        if videos.is_empty() {
+            return Ok(());
+        }
+        let mut conexao = self.obter_conexao()?;
+        let transacao = conexao.transaction()?;
+        for video in videos {
+            inserir_video(&transacao, video)?;
+        }
+        transacao.commit()?;
         Ok(())
     }
 
@@ -252,20 +231,19 @@ impl SqliteRepositorio {
 
     fn salvar_comentario(&self, comentario: &Comentario) -> Result<(), Error> {
         let conexao = self.obter_conexao()?;
-        conexao.execute(
-            UPSERT_COMENTARIO,
-            params![
-                comentario.id.as_str(),
-                comentario.video_id.as_str(),
-                comentario.autor,
-                comentario.texto,
-                comentario.publicado_em,
-                inteiro(comentario.curtidas, "curtidas")?,
-                comentario.eh_resposta,
-                i64::from(comentario.nivel_resposta),
-                comentario.parent_id.as_ref().map(ComentarioId::as_str),
-            ],
-        )?;
+        inserir_comentario(&conexao, comentario)
+    }
+
+    fn salvar_comentarios_batch(&self, comentarios: &[Comentario]) -> Result<(), Error> {
+        if comentarios.is_empty() {
+            return Ok(());
+        }
+        let mut conexao = self.obter_conexao()?;
+        let transacao = conexao.transaction()?;
+        for comentario in comentarios {
+            inserir_comentario(&transacao, comentario)?;
+        }
+        transacao.commit()?;
         Ok(())
     }
 
@@ -282,26 +260,42 @@ impl SqliteRepositorio {
 
     fn salvar_snapshot(&self, snapshot: &Snapshot) -> Result<(), Error> {
         let conexao = self.obter_conexao()?;
-        let alteradas = conexao.execute(
-            INSERT_SNAPSHOT,
-            params![
-                snapshot.entidade_tipo.as_str(),
-                snapshot.entidade_id,
-                snapshot.metrica.as_str(),
-                snapshot.valor,
-                snapshot.data_coleta,
-            ],
-        )?;
-        if alteradas == 0 {
-            tracing::debug!(
-                entidade_tipo = snapshot.entidade_tipo.as_str(),
-                entidade_id = snapshot.entidade_id.as_str(),
-                metrica = snapshot.metrica.as_str(),
-                data_coleta = snapshot.data_coleta.as_str(),
-                "snapshot já existia para o dia"
-            );
+        inserir_snapshot(&conexao, snapshot)
+    }
+
+    fn salvar_snapshots_batch(&self, snapshots: &[Snapshot]) -> Result<(), Error> {
+        if snapshots.is_empty() {
+            return Ok(());
         }
+        let mut conexao = self.obter_conexao()?;
+        let transacao = conexao.transaction()?;
+        for snapshot in snapshots {
+            inserir_snapshot(&transacao, snapshot)?;
+        }
+        transacao.commit()?;
         Ok(())
+    }
+
+    fn verificar_video_ja_coletado(&self, video_id: &VideoId) -> Result<bool, Error> {
+        let conexao = self.obter_conexao()?;
+        let hoje = chrono::Utc::now().date_naive().to_string();
+        let existe: i64 = conexao.query_row(
+            "SELECT EXISTS(
+                SELECT 1 FROM snapshots
+                WHERE entidade_tipo = ?1
+                  AND entidade_id = ?2
+                  AND metrica = ?3
+                  AND data_coleta = ?4
+            )",
+            params![
+                EntidadeTipo::Video.as_str(),
+                video_id.as_str(),
+                Metrica::ComentariosColetados.as_str(),
+                hoje,
+            ],
+            |row| row.get(0),
+        )?;
+        Ok(existe != 0)
     }
 
     fn buscar_snapshots(&self, canal_id: &CanalId) -> Result<Vec<Snapshot>, Error> {
@@ -388,6 +382,10 @@ impl RepositorioDeCanais for SqliteRepositorio {
         self.salvar_video(video).map_err(ErroDominio::from)
     }
 
+    fn upsert_videos_batch(&self, videos: &[Video]) -> Result<(), ErroDominio> {
+        self.salvar_videos_batch(videos).map_err(ErroDominio::from)
+    }
+
     fn listar_videos(&self, canal_id: &CanalId) -> Result<Vec<Video>, ErroDominio> {
         self.buscar_videos(canal_id).map_err(ErroDominio::from)
     }
@@ -397,12 +395,27 @@ impl RepositorioDeCanais for SqliteRepositorio {
             .map_err(ErroDominio::from)
     }
 
+    fn upsert_comentarios_batch(&self, comentarios: &[Comentario]) -> Result<(), ErroDominio> {
+        self.salvar_comentarios_batch(comentarios)
+            .map_err(ErroDominio::from)
+    }
+
     fn listar_comentarios(&self, video_id: &VideoId) -> Result<Vec<Comentario>, ErroDominio> {
         self.buscar_comentarios(video_id).map_err(ErroDominio::from)
     }
 
     fn guardar_snapshot(&self, snapshot: &Snapshot) -> Result<(), ErroDominio> {
         self.salvar_snapshot(snapshot).map_err(ErroDominio::from)
+    }
+
+    fn upsert_snapshots_batch(&self, snapshots: &[Snapshot]) -> Result<(), ErroDominio> {
+        self.salvar_snapshots_batch(snapshots)
+            .map_err(ErroDominio::from)
+    }
+
+    fn video_ja_coletado(&self, id: &VideoId) -> Result<bool, ErroDominio> {
+        self.verificar_video_ja_coletado(id)
+            .map_err(ErroDominio::from)
     }
 
     fn listar_snapshots(&self, canal_id: &CanalId) -> Result<Vec<Snapshot>, ErroDominio> {
@@ -436,6 +449,89 @@ impl RepositorioDeCanais for SqliteRepositorio {
         self.buscar_videos_por_nicho(nicho)
             .map_err(ErroDominio::from)
     }
+}
+
+fn inserir_canal(conexao: &Connection, canal: &Canal) -> Result<(), Error> {
+    let topic_categories = serde_json::to_string(&canal.topic_categories)?;
+    conexao.execute(
+        UPSERT_CANAL,
+        params![
+            canal.id.as_str(),
+            canal.nome,
+            canal.handle,
+            canal.url,
+            canal.descricao,
+            inteiro(canal.inscritos, "inscritos")?,
+            inteiro(canal.total_videos, "total_videos")?,
+            topic_categories,
+            canal.criado_em,
+        ],
+    )?;
+    Ok(())
+}
+
+fn inserir_video(conexao: &Connection, video: &Video) -> Result<(), Error> {
+    let tags = serde_json::to_string(&video.tags)?;
+    let topic_categories = serde_json::to_string(&video.topic_categories)?;
+    conexao.execute(
+        UPSERT_VIDEO,
+        params![
+            video.id.as_str(),
+            video.canal_id.as_str(),
+            video.titulo,
+            video.descricao,
+            video.url,
+            tags,
+            topic_categories,
+            video.publicado_em,
+            i64::from(video.duracao_segundos),
+            inteiro(video.visualizacoes, "visualizacoes")?,
+            inteiro(video.curtidas, "curtidas")?,
+            inteiro(video.total_comentarios, "total_comentarios")?,
+        ],
+    )?;
+    Ok(())
+}
+
+fn inserir_comentario(conexao: &Connection, comentario: &Comentario) -> Result<(), Error> {
+    conexao.execute(
+        UPSERT_COMENTARIO,
+        params![
+            comentario.id.as_str(),
+            comentario.video_id.as_str(),
+            comentario.autor,
+            comentario.texto,
+            comentario.publicado_em,
+            inteiro(comentario.curtidas, "curtidas")?,
+            comentario.eh_resposta,
+            i64::from(comentario.nivel_resposta),
+            comentario.parent_id.as_ref().map(ComentarioId::as_str),
+        ],
+    )?;
+    Ok(())
+}
+
+fn inserir_snapshot(conexao: &Connection, snapshot: &Snapshot) -> Result<(), Error> {
+    let alteradas = conexao.execute(
+        INSERT_SNAPSHOT,
+        params![
+            snapshot.entidade_tipo.as_str(),
+            snapshot.entidade_id,
+            snapshot.metrica.as_str(),
+            snapshot.valor,
+            snapshot.data_coleta,
+        ],
+    )?;
+    if alteradas == 0 {
+        tracing::debug!(
+            entidade_tipo = snapshot.entidade_tipo.as_str(),
+            entidade_id = snapshot.entidade_id.as_str(),
+            metrica = snapshot.metrica.as_str(),
+            data_coleta = snapshot.data_coleta.as_str(),
+            "snapshot já existia para o dia"
+        );
+    }
+    Ok(())
 }
 
 fn aplicar_migracoes(conexao: &Connection) -> Result<(), Error> {

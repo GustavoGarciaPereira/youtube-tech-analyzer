@@ -55,6 +55,10 @@ pub enum Metrica {
     Curtidas,
     /// Número total de comentários de um vídeo.
     TotalComentarios,
+    /// Marcador de que os comentários de um vídeo já foram recolhidos no dia.
+    ComentariosColetados,
+    /// Total de comentários efetivamente recolhidos numa execução de canal.
+    TotalComentariosColetados,
 }
 
 impl Metrica {
@@ -67,6 +71,8 @@ impl Metrica {
             Self::Visualizacoes => "visualizacoes",
             Self::Curtidas => "curtidas",
             Self::TotalComentarios => "total_comentarios",
+            Self::ComentariosColetados => "comentarios_coletados",
+            Self::TotalComentariosColetados => "total_comentarios_coletados",
         }
     }
 }
@@ -81,6 +87,8 @@ impl TryFrom<&str> for Metrica {
             "visualizacoes" => Ok(Self::Visualizacoes),
             "curtidas" => Ok(Self::Curtidas),
             "total_comentarios" => Ok(Self::TotalComentarios),
+            "comentarios_coletados" => Ok(Self::ComentariosColetados),
+            "total_comentarios_coletados" => Ok(Self::TotalComentariosColetados),
             outra => Err(ErroDominio::DadosInvalidos(format!(
                 "métrica desconhecida: {outra}"
             ))),
@@ -104,7 +112,7 @@ pub struct Snapshot {
     pub metrica: Metrica,
     /// Valor inteiro da métrica no momento da recolha.
     pub valor: i64,
-    /// Data da recolha em formato RFC 3339.
+    /// Data da recolha no formato `YYYY-MM-DD` (UTC).
     pub data_coleta: String,
 }
 

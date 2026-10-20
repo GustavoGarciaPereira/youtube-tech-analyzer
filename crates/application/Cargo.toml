@@ -5,4 +5,12 @@ edition.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+chrono.workspace = true
 domain = { path = "../domain" }
+thiserror.workspace = true
+tokio.workspace = true
+tokio-util.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tokio-test.workspace = true

@@ -8,7 +8,10 @@ mod videos;
 mod test_support;
 
 use std::collections::HashMap;
+use std::future::Future;
+use std::pin::Pin;
 
+use domain::CanalRef;
 use domain::entities::{canal::Canal, comentario::Comentario, video::Video};
 use domain::errors::ErroDominio;
 use domain::ids::{CanalId, VideoId};
@@ -117,31 +120,46 @@ impl ApiV3Coletor {
 }
 
 impl ColetorDeCanal for ApiV3Coletor {
-    async fn coletar_canal(&self, referencia: &str) -> Result<Canal, ErroDominio> {
-        let (canal, uploads) = canais::resolver_canal(&self.client, referencia)
-            .await
-            .map_err(ErroDominio::from)?;
-        self.guardar_uploads(&canal.id, uploads).await;
-        Ok(canal)
+    fn coletar_canal<'a>(
+        &'a self,
+        canal_ref: &CanalRef,
+    ) -> Pin<Box<dyn Future<Output = Result<Canal, ErroDominio>> + Send + 'a>> {
+        let canal_ref = canal_ref.clone();
+        Box::pin(async move {
+            let (canal, uploads) = canais::resolver_canal(&self.client, &canal_ref)
+                .await
+                .map_err(ErroDominio::from)?;
+            self.guardar_uploads(&canal.id, uploads).await;
+            Ok(canal)
+        })
     }
 
-    async fn coletar_videos(&self, canal_id: &CanalId) -> Result<Vec<Video>, ErroDominio> {
-        let uploads = self
-            .obter_uploads(canal_id)
-            .await
-            .map_err(ErroDominio::from)?;
-        videos::listar_videos(&self.client, canal_id, &uploads)
-            .await
-            .map_err(ErroDominio::from)
+    fn coletar_videos<'a>(
+        &'a self,
+        canal_id: &CanalId,
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<Video>, ErroDominio>> + Send + 'a>> {
+        let canal_id = canal_id.clone();
+        Box::pin(async move {
+            let uploads = self
+                .obter_uploads(&canal_id)
+                .await
+                .map_err(ErroDominio::from)?;
+            videos::listar_videos(&self.client, &canal_id, &uploads)
+                .await
+                .map_err(ErroDominio::from)
+        })
     }
 
-    async fn coletar_comentarios(
-        &self,
+    fn coletar_comentarios<'a>(
+        &'a self,
         video_id: &VideoId,
-    ) -> Result<Vec<Comentario>, ErroDominio> {
-        self.coletar_comentarios_com_profundidade(video_id, self.max_depth)
-            .await
-            .map_err(ErroDominio::from)
+    ) -> Pin<Box<dyn Future<Output = Result<Vec<Comentario>, ErroDominio>> + Send + 'a>> {
+        let video_id = video_id.clone();
+        Box::pin(async move {
+            self.coletar_comentarios_com_profundidade(&video_id, self.max_depth)
+                .await
+                .map_err(ErroDominio::from)
+        })
     }
 }
 

@@ -13,5 +13,6 @@ mod errors;
 mod url;
 
 pub use api_v3::{ApiV3Coletor, MAX_DEPTH_PADRAO};
+pub use domain::CanalRef;
 pub use errors::ColetaError;
-pub use url::CanalRef;
+pub use url::parse as parse_canal_ref;
