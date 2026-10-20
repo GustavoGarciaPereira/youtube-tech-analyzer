@@ -86,6 +86,8 @@ text
   `Arc<dyn CacheDeClassificacoes>` e não depende de `infra-storage`. O cache
   usa a tabela `classificacoes_nicho_cache`; a tabela canónica
   `classificacoes_nicho` mantém-se para relatórios e `nicho_do_canal`.
+- Os binários `desktop` e `yta` carregam `.env` com `dotenvy` no arranque.
+  Variáveis já exportadas na shell têm prioridade.
 
 ## 8. SQLite: DELETE/REPLACE e CASCADE
 Nunca usar `INSERT OR REPLACE` em tabelas com `ON DELETE CASCADE`. O `REPLACE`

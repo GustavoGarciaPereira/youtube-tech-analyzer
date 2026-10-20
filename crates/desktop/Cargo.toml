@@ -16,6 +16,7 @@ path = "src/bin/yta.rs"
 anyhow.workspace = true
 application = { path = "../application" }
 clap.workspace = true
+dotenvy.workspace = true
 domain = { path = "../domain" }
 infra-storage = { path = "../infra-storage" }
 infra-youtube = { path = "../infra-youtube" }

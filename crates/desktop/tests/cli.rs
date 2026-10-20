@@ -15,6 +15,10 @@ fn yta(db: &Path) -> Command {
     let mut comando = Command::cargo_bin("yta").expect("binário yta");
     comando.env("YTA_DB_PATH", db);
     comando.env_remove("YOUTUBE_API_KEY");
+    // Evita que o `.env` do repositório seja carregado nos testes.
+    if let Some(diretorio) = db.parent() {
+        comando.current_dir(diretorio);
+    }
     comando
 }
 

@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 fn main() {
+    let _ = dotenvy::dotenv();
     let metadados = application::MetadadosReproducao::new(infra_storage::VERSAO_SCHEMA, None);
     println!(
         "App a iniciar (commit {}, schema {})",
