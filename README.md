@@ -170,9 +170,9 @@ Binários Linux x86_64 (glibc >= 2.35) estão na
 O arquivo inclui `yta` (CLI), `yta-desktop` (GUI) e `INSTALL.txt`.
 
 ```bash
-sha256sum -c yta-v0.1.0-x86_64-unknown-linux-gnu.tar.gz.sha256
-tar -xzf yta-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
-cd yta-v0.1.0-x86_64-unknown-linux-gnu
+sha256sum -c yta-v0.2.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar -xzf yta-v0.2.0-x86_64-unknown-linux-gnu.tar.gz
+cd yta-v0.2.0-x86_64-unknown-linux-gnu
 ./yta --help
 ./yta-desktop   # GUI: precisa de libxkbcommon, libwayland e libGL
 ```
@@ -183,8 +183,8 @@ Em Debian/Ubuntu, as bibliotecas da GUI instalam-se com:
 sudo apt install libxkbcommon0 libwayland-client0 libx11-6 libgl1
 ```
 
-> A release v0.1.0 é anterior à análise de sentimento. Para usar
-> `yta sentimentos`, compila a partir de `main` ou usa uma release posterior.
+> A release v0.2.0 inclui a análise de sentimento. O modelo (~143 MB) não
+> vai dentro do tarball: é descarregado no primeiro uso.
 
 Para compilar do código-fonte, ver a secção seguinte.
 
@@ -556,7 +556,8 @@ Requer também `YOUTUBE_API_KEY` e o binário `opencode` disponível no `PATH`
 - Relatórios com poucos pontos produzem avisos, não tendências.
 - A análise de sentimento só está disponível para Linux x86_64 e exige uma
   descarga única de ~143 MB; a inferência é serializada por uma sessão ONNX.
-- A release v0.1.0 não inclui a análise de sentimento (é anterior a ela).
+- O tarball da release não inclui o modelo de sentimento; o primeiro uso
+  requer rede para a descarga única de ~143 MB.
 - Próximos passos naturais:
   - automação diária com systemd timer ou cron;
   - integração da classificação por LLM no pipeline;
