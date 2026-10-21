@@ -11,7 +11,7 @@ use domain::entities::{
 use domain::errors::ErroDominio;
 use domain::ids::{CanalId, ComentarioId, VideoId};
 use domain::ports::{CacheDeClassificacoes, RepositorioDeCanais};
-use domain::value_objects::CategoriaManual;
+use domain::value_objects::{CategoriaManual, ScoreSentimento};
 use rusqlite::{Connection, OptionalExtension, params};
 
 use crate::error::Error;
@@ -84,6 +84,24 @@ ON CONFLICT(id) DO UPDATE SET
     nivel_resposta = excluded.nivel_resposta,
     parent_id = excluded.parent_id,
     data_coleta = excluded.data_coleta
+"#;
+
+const INSERT_SENTIMENTO: &str = r#"
+INSERT INTO comentarios_sentimento (
+    comentario_id, versao_modelo, sentimento, score, data_analise
+) VALUES (?1, ?2, ?3, ?4, ?5)
+ON CONFLICT(comentario_id, versao_modelo) DO NOTHING
+"#;
+
+const SELECT_COMENTARIOS_SEM_SENTIMENTO: &str = r#"
+SELECT c.id, c.video_id, c.autor, c.texto, c.publicado_em, c.curtidas,
+       c.eh_resposta, c.nivel_resposta, c.parent_id
+FROM comentarios c
+JOIN videos v ON v.id = c.video_id
+LEFT JOIN comentarios_sentimento s
+       ON s.comentario_id = c.id AND s.versao_modelo = ?2
+WHERE v.canal_id = ?1 AND s.comentario_id IS NULL
+ORDER BY c.publicado_em ASC, c.id ASC
 "#;
 
 const INSERT_SNAPSHOT: &str = r#"
@@ -401,6 +419,54 @@ impl SqliteRepositorio {
         Ok(comentarios)
     }
 
+    fn salvar_sentimento(
+        &self,
+        comentario_id: &ComentarioId,
+        score: &ScoreSentimento,
+        versao_modelo: &str,
+    ) -> Result<(), Error> {
+        if versao_modelo.trim().is_empty() {
+            return Err(Error::Domain(ErroDominio::DadosInvalidos(
+                "versao_modelo não pode ser vazia".to_owned(),
+            )));
+        }
+        if !score.e_valido() {
+            return Err(Error::Domain(ErroDominio::DadosInvalidos(format!(
+                "score de sentimento fora do intervalo [-1, 1]: {}",
+                score.score
+            ))));
+        }
+
+        let conexao = self.obter_conexao()?;
+        let analisado_em = chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        conexao.execute(
+            INSERT_SENTIMENTO,
+            params![
+                comentario_id.as_str(),
+                versao_modelo,
+                score.sentimento.como_str(),
+                score.score,
+                analisado_em
+            ],
+        )?;
+        Ok(())
+    }
+
+    fn buscar_comentarios_sem_sentimento(
+        &self,
+        canal_id: &CanalId,
+        versao_modelo: &str,
+    ) -> Result<Vec<Comentario>, Error> {
+        let conexao = self.obter_conexao()?;
+        let mut stmt = conexao.prepare(SELECT_COMENTARIOS_SEM_SENTIMENTO)?;
+        let mut rows = stmt.query(params![canal_id.as_str(), versao_modelo])?;
+        let mut comentarios = Vec::new();
+        while let Some(row) = rows.next()? {
+            comentarios.push(mapear_comentario(row)?);
+        }
+        Ok(comentarios)
+    }
+
     fn salvar_snapshot(&self, snapshot: &Snapshot) -> Result<(), Error> {
         let conexao = self.obter_conexao()?;
         inserir_snapshot(&conexao, snapshot)
@@ -649,6 +715,25 @@ impl RepositorioDeCanais for SqliteRepositorio {
 
     fn listar_comentarios(&self, video_id: &VideoId) -> Result<Vec<Comentario>, ErroDominio> {
         self.buscar_comentarios(video_id).map_err(ErroDominio::from)
+    }
+
+    fn guardar_sentimento(
+        &self,
+        comentario_id: &ComentarioId,
+        score: &ScoreSentimento,
+        versao_modelo: &str,
+    ) -> Result<(), ErroDominio> {
+        self.salvar_sentimento(comentario_id, score, versao_modelo)
+            .map_err(ErroDominio::from)
+    }
+
+    fn comentarios_sem_sentimento(
+        &self,
+        canal_id: &CanalId,
+        versao_modelo: &str,
+    ) -> Result<Vec<Comentario>, ErroDominio> {
+        self.buscar_comentarios_sem_sentimento(canal_id, versao_modelo)
+            .map_err(ErroDominio::from)
     }
 
     fn guardar_snapshot(&self, snapshot: &Snapshot) -> Result<(), ErroDominio> {

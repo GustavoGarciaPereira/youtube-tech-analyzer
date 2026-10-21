@@ -20,7 +20,7 @@ use domain::entities::{
 use domain::errors::ErroDominio;
 use domain::ids::{CanalId, ComentarioId, VideoId};
 use domain::ports::{ColetorDeCanal, RepositorioDeCanais};
-use domain::value_objects::CategoriaManual;
+use domain::value_objects::{CategoriaManual, ScoreSentimento};
 
 /// Coletor configurável para testes, sem rede.
 pub struct FakeColetor {
@@ -140,6 +140,7 @@ struct EstadoFake {
     classificacoes: HashMap<VideoId, ClassificacaoNicho>,
     nicho_por_canal: HashMap<CanalId, Nicho>,
     categoria_por_canal: HashMap<CanalId, CategoriaManual>,
+    sentimentos: HashMap<(ComentarioId, String), ScoreSentimento>,
 }
 
 /// Repositório em memória para testes.
@@ -311,6 +312,56 @@ impl RepositorioDeCanais for FakeRepositorio {
             .cloned()
             .collect();
         comentarios.sort_by(|a, b| a.publicado_em.cmp(&b.publicado_em));
+        Ok(comentarios)
+    }
+
+    fn guardar_sentimento(
+        &self,
+        comentario_id: &ComentarioId,
+        score: &ScoreSentimento,
+        versao_modelo: &str,
+    ) -> Result<(), ErroDominio> {
+        let mut estado = self.estado();
+        if !estado.comentarios.contains_key(comentario_id) {
+            return Err(ErroDominio::NaoEncontrado {
+                recurso: "comentario",
+                id: comentario_id.as_str().to_owned(),
+            });
+        }
+        estado
+            .sentimentos
+            .insert((comentario_id.clone(), versao_modelo.to_owned()), *score);
+        Ok(())
+    }
+
+    fn comentarios_sem_sentimento(
+        &self,
+        canal_id: &CanalId,
+        versao_modelo: &str,
+    ) -> Result<Vec<Comentario>, ErroDominio> {
+        let estado = self.estado();
+        let videos_do_canal: HashSet<&VideoId> = estado
+            .videos
+            .values()
+            .filter(|video| &video.canal_id == canal_id)
+            .map(|video| &video.id)
+            .collect();
+        let mut comentarios: Vec<Comentario> = estado
+            .comentarios
+            .values()
+            .filter(|comentario| videos_do_canal.contains(&comentario.video_id))
+            .filter(|comentario| {
+                !estado
+                    .sentimentos
+                    .contains_key(&(comentario.id.clone(), versao_modelo.to_owned()))
+            })
+            .cloned()
+            .collect();
+        comentarios.sort_by(|a, b| {
+            a.publicado_em
+                .cmp(&b.publicado_em)
+                .then_with(|| a.id.as_str().cmp(b.id.as_str()))
+        });
         Ok(comentarios)
     }
 

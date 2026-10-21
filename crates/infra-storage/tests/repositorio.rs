@@ -1,7 +1,7 @@
 use domain::ports::RepositorioDeCanais;
 use domain::{
     Canal, CanalId, CategoriaManual, ClassificacaoNicho, Comentario, ComentarioId, EntidadeTipo,
-    ErroDominio, Metrica, Nicho, Snapshot, Video, VideoId,
+    ErroDominio, Metrica, Nicho, ScoreSentimento, Sentimento, Snapshot, Video, VideoId,
 };
 use infra_storage::SqliteRepositorio;
 
@@ -356,5 +356,72 @@ fn listar_videos_por_nicho_usa_a_classificacao_persistida() -> Resultado {
         .expect("classificação existente");
     assert_eq!(lida.nicho, Nicho::Programacao);
     assert_eq!(lida.metodo, "teste");
+    Ok(())
+}
+
+#[test]
+fn sentimento_e_idempotente_por_versao_de_modelo() -> Resultado {
+    let repo = repositorio()?;
+    let canal = canal("canal-1");
+    repo.guardar_canal(&canal)?;
+    repo.guardar_video(&video("video-1", "canal-1", "2024-01-01T00:00:00Z"))?;
+    repo.guardar_comentario(&comentario("c1", "video-1"))?;
+    repo.guardar_comentario(&comentario("c2", "video-1"))?;
+
+    assert_eq!(
+        repo.comentarios_sem_sentimento(&canal.id, "modelo-v1")?
+            .len(),
+        2
+    );
+
+    let score = ScoreSentimento::novo(Sentimento::Positivo, 0.92);
+    repo.guardar_sentimento(&ComentarioId::new("c1"), &score, "modelo-v1")?;
+
+    let pendentes = repo.comentarios_sem_sentimento(&canal.id, "modelo-v1")?;
+    assert_eq!(pendentes.len(), 1);
+    assert_eq!(pendentes[0].id.as_str(), "c2");
+
+    // Repetir a análise da mesma versão é idempotente.
+    repo.guardar_sentimento(&ComentarioId::new("c1"), &score, "modelo-v1")?;
+    assert_eq!(
+        repo.comentarios_sem_sentimento(&canal.id, "modelo-v1")?
+            .len(),
+        1
+    );
+
+    // Uma versão nova do modelo volta a considerar o comentário já analisado.
+    assert_eq!(
+        repo.comentarios_sem_sentimento(&canal.id, "modelo-v2")?
+            .len(),
+        2
+    );
+    Ok(())
+}
+
+#[test]
+fn sentimento_rejeita_score_fora_do_intervalo() -> Resultado {
+    let repo = repositorio()?;
+    let canal = canal("canal-1");
+    repo.guardar_canal(&canal)?;
+    repo.guardar_video(&video("video-1", "canal-1", "2024-01-01T00:00:00Z"))?;
+    repo.guardar_comentario(&comentario("c1", "video-1"))?;
+
+    let invalido = ScoreSentimento::novo(Sentimento::Negativo, -1.5);
+    let erro = repo
+        .guardar_sentimento(&ComentarioId::new("c1"), &invalido, "modelo-v1")
+        .expect_err("score fora de [-1, 1] deve falhar");
+    assert!(
+        matches!(erro, ErroDominio::DadosInvalidos(_)),
+        "erro: {erro}"
+    );
+
+    let valido = ScoreSentimento::novo(Sentimento::Neutro, 0.0);
+    let erro = repo
+        .guardar_sentimento(&ComentarioId::new("c1"), &valido, "  ")
+        .expect_err("versão vazia deve falhar");
+    assert!(
+        matches!(erro, ErroDominio::DadosInvalidos(_)),
+        "erro: {erro}"
+    );
     Ok(())
 }

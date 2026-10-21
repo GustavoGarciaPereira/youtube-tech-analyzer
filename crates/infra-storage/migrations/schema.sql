@@ -96,3 +96,19 @@ CREATE TABLE IF NOT EXISTS canal_categoria_manual (
 CREATE INDEX IF NOT EXISTS idx_classificacoes_nicho_nicho ON classificacoes_nicho(nicho);
 CREATE INDEX IF NOT EXISTS idx_classificacoes_cache_versao ON classificacoes_nicho_cache(versao_classificador);
 CREATE INDEX IF NOT EXISTS idx_canal_categoria_categoria ON canal_categoria_manual(categoria);
+
+-- Sentimento por comentário e versão do modelo.
+-- A chave inclui a versão para permitir re-análise quando o modelo muda,
+-- preservando o histórico das versões anteriores.
+CREATE TABLE IF NOT EXISTS comentarios_sentimento (
+    comentario_id TEXT NOT NULL,
+    versao_modelo TEXT NOT NULL,
+    sentimento TEXT NOT NULL CHECK (sentimento IN ('positivo', 'neutro', 'negativo')),
+    score REAL NOT NULL CHECK (score >= -1.0 AND score <= 1.0),
+    data_analise TEXT NOT NULL,
+    PRIMARY KEY (comentario_id, versao_modelo),
+    FOREIGN KEY (comentario_id) REFERENCES comentarios(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_comentarios_sentimento_versao
+    ON comentarios_sentimento(versao_modelo);

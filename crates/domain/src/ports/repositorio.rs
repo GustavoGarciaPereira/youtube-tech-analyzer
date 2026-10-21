@@ -3,8 +3,8 @@ use crate::entities::{
     snapshot::EntidadeTipo, snapshot::Metrica, snapshot::Snapshot, video::Video,
 };
 use crate::errors::ErroDominio;
-use crate::ids::{CanalId, VideoId};
-use crate::value_objects::CategoriaManual;
+use crate::ids::{CanalId, ComentarioId, VideoId};
+use crate::value_objects::{CategoriaManual, ScoreSentimento};
 
 /// Porta de saída para persistência e consulta de dados.
 ///
@@ -60,6 +60,28 @@ pub trait RepositorioDeCanais: Send + Sync {
 
     /// Lista os comentários de um vídeo, ordenados por data de publicação.
     fn listar_comentarios(&self, video_id: &VideoId) -> Result<Vec<Comentario>, ErroDominio>;
+
+    /// Guarda o resultado da análise de sentimento de um comentário.
+    ///
+    /// A chave lógica é (comentario_id, versao_modelo): cada versão do modelo
+    /// tem a sua linha, pelo que re-analisar não apaga o histórico anterior.
+    /// A operação é idempotente para o mesmo par.
+    fn guardar_sentimento(
+        &self,
+        comentario_id: &ComentarioId,
+        score: &ScoreSentimento,
+        versao_modelo: &str,
+    ) -> Result<(), ErroDominio>;
+
+    /// Lista comentários de um canal ainda sem análise para esta versão.
+    ///
+    /// Um comentário analisado com outra versão do modelo volta a aparecer:
+    /// é isso que permite re-analisar quando o modelo muda.
+    fn comentarios_sem_sentimento(
+        &self,
+        canal_id: &CanalId,
+        versao_modelo: &str,
+    ) -> Result<Vec<Comentario>, ErroDominio>;
 
     /// Regista uma observação de métrica.
     fn guardar_snapshot(&self, snapshot: &Snapshot) -> Result<(), ErroDominio>;
