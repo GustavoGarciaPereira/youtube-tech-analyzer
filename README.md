@@ -147,6 +147,30 @@ Em sistemas com `XDG_DATA_HOME`, é usado `$XDG_DATA_HOME/yta/yta.db`.
 
 ---
 
+## Instalação
+
+Binários Linux x86_64 (glibc >= 2.35) estão na
+[página de releases](https://github.com/GustavoGarciaPereira/youtube-tech-analyzer/releases).
+O arquivo inclui `yta` (CLI), `yta-desktop` (GUI) e `INSTALL.txt`.
+
+```bash
+sha256sum -c yta-v0.1.0-x86_64-unknown-linux-gnu.tar.gz.sha256
+tar -xzf yta-v0.1.0-x86_64-unknown-linux-gnu.tar.gz
+cd yta-v0.1.0-x86_64-unknown-linux-gnu
+./yta --help
+./yta-desktop   # GUI: precisa de libxkbcommon, libwayland e libGL
+```
+
+Em Debian/Ubuntu, as bibliotecas da GUI instalam-se com:
+
+```bash
+sudo apt install libxkbcommon0 libwayland-client0 libx11-6 libgl1
+```
+
+Para compilar do código-fonte, ver a secção seguinte.
+
+---
+
 ## Compilar
 
 ```bash
