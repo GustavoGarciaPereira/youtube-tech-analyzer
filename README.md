@@ -25,9 +25,11 @@ Pipeline de ETL e análise de canais de tecnologia do YouTube, escrito em Rust.
 O projeto recolhe metadados de canais, vídeos e comentários, guarda snapshots
 históricos numa base de dados SQLite e gera relatórios estatísticos sobre a
 evolução de métricas como visualizações, curtidas e número de comentários.
-Inclui uma GUI desktop em `egui` e uma CLI (`yta`).
+Inclui uma GUI desktop em `egui`, uma CLI (`yta`) e análise de sentimento
+local dos comentários (ONNX, sem Python).
 
-> **Estado:** MVP funcional. Coleta, relatórios, GUI e CLI estão implementados.
+> **Estado:** MVP funcional. Coleta, relatórios, GUI, CLI e análise de
+> sentimento estão implementados.
 
 ---
 
@@ -42,6 +44,9 @@ Inclui uma GUI desktop em `egui` e uma CLI (`yta`).
   - Theil-Sen para declive e intervalo de confiança;
   - correção de comparações múltiplas Benjamini-Hochberg (FDR);
   - comparação com canais pares da mesma categoria;
+  - análise cross-section por data de publicação;
+  - diagnóstico de robustez do views/dia por janela temporal;
+  - série mensal de sentimento dos comentários;
   - exportação Markdown, CSV e JSON.
 - GUI com três ecrãs: Canais, Relatório e Definições.
 - CLI pensada para automação e uso avançado.
@@ -49,6 +54,8 @@ Inclui uma GUI desktop em `egui` e uma CLI (`yta`).
   - comentários são recolhidos uma vez por vídeo;
   - métricas são gravadas diariamente;
   - `--recoletar-comentarios` força um refresh manual.
+- Análise de sentimento local: o texto dos comentários não sai da máquina;
+  o modelo (~143 MB) é descarregado uma única vez.
 - Base de dados local; não há telemetria nem servidor próprio.
 
 ---
@@ -66,6 +73,7 @@ dentro, em direção ao domínio.
 | `infra-youtube` | Adaptador da YouTube Data API v3. |
 | `infra-storage` | Repositório SQLite, migrações e cache de classificações. |
 | `infra-ai` | Classificação por LLM via OpenCode (experimental). |
+| `infra-nlp` | Análise de sentimento local (ONNX Runtime + tokenizers). |
 | `desktop` | Composition root, GUI `egui` e binário CLI `yta`. |
 
 Fluxo principal:
@@ -87,6 +95,11 @@ infra-youtube ──► application/ColetarCanal ──► infra-storage/SQLite
 O crate `domain` não depende de `reqwest`, `rusqlite`, `egui` nem `tokio`.
 A camada `application` não depende de `infra-*` nem de `desktop`.
 
+A análise de sentimento segue o mesmo desenho: o caso de uso
+`AnalisarSentimentos` orquestra a porta `AnalisadorDeSentimento`, o crate
+`infra-nlp` executa o ONNX localmente e o resultado é persistido em
+`comentarios_sentimento` pelo `infra-storage`.
+
 ---
 
 ## Requisitos
@@ -100,6 +113,9 @@ A camada `application` não depende de `infra-*` nem de `desktop`.
 - SQLite não precisa de ser instalado: `rusqlite` usa a feature `bundled`.
 - Opcional: CLI `opencode` e `OPENCODE_MODEL` para a classificação LLM
   experimental.
+- Opcional: análise de sentimento — descarga única de ~143 MB (modelo ONNX,
+  tokenizer e runtime). Linux x86_64 com glibc >= 2.27; não requer Python nem
+  chave da API.
 
 > A API do YouTube tem quota. Uma coleta grande, especialmente com
 > `--max-depth -1`, pode consumir quota rapidamente.
@@ -167,6 +183,9 @@ Em Debian/Ubuntu, as bibliotecas da GUI instalam-se com:
 sudo apt install libxkbcommon0 libwayland-client0 libx11-6 libgl1
 ```
 
+> A release v0.1.0 é anterior à análise de sentimento. Para usar
+> `yta sentimentos`, compila a partir de `main` ou usa uma release posterior.
+
 Para compilar do código-fonte, ver a secção seguinte.
 
 ---
@@ -219,9 +238,13 @@ relatórios continuam disponíveis.
 
 - **Relatório**
   - Métrica: visualizações, curtidas ou total de comentários.
-  - Período: 30, 60, 90 dias ou tudo.
-  - Gráfico de série temporal, linha Theil-Sen e banda IC95.
+  - Análise: por coleta (série temporal) ou por publicação (cross-section).
+  - Período: 30, 60, 90, 180, 365 ou 730 dias, ou tudo.
+  - Escala logarítmica opcional no gráfico.
+  - Gráfico de série, linha Theil-Sen, banda IC95 e diagnóstico de robustez.
   - Tabela de tendências, comparação com pares e avisos.
+  - Bloco de sentimento com descarga do modelo, análise assíncrona e gráfico
+    mensal (score em [-1, 1] e contagem de comentários).
   - Exportação Markdown/CSV/JSON copiada para o clipboard.
   - `Ctrl+R` regenera o relatório.
 
@@ -262,6 +285,8 @@ Depois de compilada:
 | `yta canal coletar <REF>` | Coleta vídeos, métricas e comentários. |
 | `yta canais coletar-todos` | Coleta todos os canais guardados. |
 | `yta relatorio <REF>` | Gera um relatório do canal. |
+| `yta sentimentos <REF> [--concorrencia N]` | Analisa comentários pendentes com o modelo local. |
+| `yta modelos baixar-sentimento` | Descarrega modelo, tokenizer e runtime (~143 MB). |
 | `yta db caminho` | Mostra o caminho da base de dados em uso. |
 
 `<REF>` pode ser um channel ID (`UC...`), um `@handle` ou uma URL do YouTube.
@@ -306,6 +331,12 @@ independente de qualquer classificação automática por LLM.
 # Relatório dos últimos 90 dias, em JSON
 ./target/debug/yta relatorio UCxxxxxxxxxxxxxxxxxxxxxx \
   --formato json --periodo-dias 90 --saida relatorio.json
+
+# Preparar o modelo de sentimento (~143 MB, uma vez)
+./target/debug/yta modelos baixar-sentimento
+
+# Analisar comentários pendentes com inferência local
+./target/debug/yta sentimentos UCxxxxxxxxxxxxxxxxxxxxxx --concorrencia 2
 
 # Caminho da base de dados
 ./target/debug/yta db caminho
@@ -355,9 +386,10 @@ Por omissão, o relatório analisa:
 - `curtidas`
 - `total_comentarios`
 
-Cada métrica precisa de pelo menos **5 snapshots** para entrar na análise.
-Abaixo de **20 snapshots**, o relatório continua a ser gerado, mas marca a
-amostra como insuficiente para inferência preditiva.
+Cada métrica precisa de pelo menos **5 pontos** (snapshots ou vídeos,
+conforme o eixo) para entrar na análise. Abaixo de **20 pontos**, o relatório
+continua a ser gerado, mas marca a amostra como insuficiente para inferência
+preditiva.
 
 A comparação de pares usa a categoria manual do canal. Se não existirem pares
 na mesma categoria, o relatório faz fallback para todos os canais e emite um
@@ -365,6 +397,56 @@ aviso.
 
 O nível de significância por omissão é `0.05`, com correção FDR sobre as
 métricas do relatório.
+
+### Eixos temporais
+
+- `--modo por-coleta` (default): usa `data_coleta`; o slope é por dia.
+- `--modo por-publicacao`: cross-section com `publicado_em`; o slope é por
+  vídeo. `--idade-minima-dias` (default 7) exclui vídeos recentes;
+  `--sem-normalizacao` desliga views/dia e os rácios de engagement.
+- `--periodo-dias N` aplica-se ao eixo escolhido (coleta ou publicação).
+
+O modo por publicação inclui um diagnóstico que recalcula o slope em janelas
+mais curtas. Se o valor variar muito, o relatório avisa que o views/dia é
+sensível à idade dos vídeos.
+
+### Sentimento
+
+Quando existem análises para a versão actual do modelo, o relatório inclui a
+série mensal de sentimento e o Markdown ganha a secção Análise de Sentimento,
+com média ponderada, tabela por mês e atribuição do modelo. Ver a secção
+seguinte.
+
+---
+
+## Análise de sentimento (NLP)
+
+O projeto classifica comentários em **Positivo**, **Neutro** ou **Negativo**
+com um modelo local. Nenhum texto é enviado para serviços externos.
+
+- Modelo: CardiffNLP `twitter-roberta-base-sentiment-latest`, conversão ONNX
+  INT8 da Xenova, com 3 classes. O score é P(positivo) − P(negativo), em
+  [-1, 1].
+- Runtime: ONNX Runtime 1.22.0 carregado dinamicamente, mais o `tokenizers`
+  da HuggingFace.
+- Artefactos (~143 MB) em `$XDG_DATA_HOME/yta/models/roberta-sentiment`
+  (ou `~/.local/share/yta/models/roberta-sentiment`): `model.onnx`,
+  `tokenizer.json` e `libonnxruntime.so`.
+- O download acontece uma vez, com `yta modelos baixar-sentimento` ou pelo
+  botão no ecrã Relatório. A partir daí, a análise funciona offline.
+- A análise é idempotente por versão do modelo
+  (`roberta-sentiment-int8-v1`). Mudar de modelo exige uma versão nova, para
+  não reutilizar classificações antigas.
+- GUI: o bloco de sentimento mostra o botão de download, a contagem de
+  comentários pendentes e o gráfico mensal.
+- CLI: `yta sentimentos <REF> --concorrencia N`.
+
+O modelo é distribuído sob **CC-BY-4.0** (CardiffNLP) e a atribuição aparece
+no relatório e na GUI. O código do projeto continua MIT.
+
+Limitações actuais: só Linux x86_64; a sessão ONNX é protegida por `Mutex`,
+por isso a inferência é serializada (a concorrência paraleliza tokenização e
+IO); o primeiro uso precisa de rede.
 
 ---
 
@@ -375,12 +457,13 @@ Tabelas principais:
 - `canais`
 - `videos`
 - `comentarios`
+- `comentarios_sentimento`
 - `snapshots`
 - `canal_categoria_manual`
 - `classificacoes_nicho` (canónica)
 - `classificacoes_nicho_cache` (cache do LLM)
 
-A versão atual do schema é `3`.
+A versão atual do schema é `4`.
 
 Para inspecionar a base de dados:
 
@@ -403,6 +486,9 @@ cargo build --workspace
 ```
 
 A suite cobre domínio, casos de uso, adaptadores, CLI e funções puras da GUI.
+O motor NLP corre sem o modelo: o teste de inferência real está marcado
+`#[ignore]` e executa-se manualmente com
+`cargo test -p infra-nlp --test inferencia -- --ignored`.
 
 ---
 
@@ -411,13 +497,17 @@ A suite cobre domínio, casos de uso, adaptadores, CLI e funções puras da GUI.
 ```text
 .
 ├── .env.example
-├── .github/workflows/ci.yml
+├── .github/workflows/
+│   ├── ci.yml
+│   └── release.yml
 ├── CONTRIBUTING.md
 ├── LICENSE
 ├── README.md
 ├── Cargo.toml
 ├── rust-toolchain.toml
 ├── docs/
+├── packaging/
+│   └── INSTALL.txt
 ├── crates/
 │   ├── domain/
 │   ├── application/
@@ -425,6 +515,7 @@ A suite cobre domínio, casos de uso, adaptadores, CLI e funções puras da GUI.
 │   ├── infra-youtube/
 │   ├── infra-storage/
 │   ├── infra-ai/
+│   ├── infra-nlp/
 │   └── desktop/
 │       ├── src/main.rs      # GUI
 │       ├── src/app.rs
@@ -462,11 +553,15 @@ Requer também `YOUTUBE_API_KEY` e o binário `opencode` disponível no `PATH`
 - A classificação por LLM está experimental e fora do fluxo principal.
 - A GUI exporta para o clipboard; ainda não abre um diálogo de ficheiro.
 - A remoção de canais está desativada no MVP.
-- Relatórios com poucos snapshots produzem avisos, não tendências.
+- Relatórios com poucos pontos produzem avisos, não tendências.
+- A análise de sentimento só está disponível para Linux x86_64 e exige uma
+  descarga única de ~143 MB; a inferência é serializada por uma sessão ONNX.
+- A release v0.1.0 não inclui a análise de sentimento (é anterior a ela).
 - Próximos passos naturais:
   - automação diária com systemd timer ou cron;
   - integração da classificação por LLM no pipeline;
-  - screenshots e documentação visual da GUI.
+  - pool de sessões ONNX para paralelizar a inferência;
+  - release com a análise de sentimento e screenshot do gráfico mensal.
 
 ---
 
