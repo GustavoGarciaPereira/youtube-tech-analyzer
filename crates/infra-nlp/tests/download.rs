@@ -4,6 +4,17 @@ use infra_nlp::{ErroNlp, ModelManager};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+const TAMANHO_MINIMO_MODELO: u64 = 50 * 1024 * 1024;
+const TAMANHO_MINIMO_TOKENIZER: u64 = 100 * 1024;
+const TAMANHO_MINIMO_RUNTIME: u64 = 1_000_000;
+
+fn criar_com_tamanho(caminho: std::path::PathBuf, tamanho: u64) {
+    fs::File::create(caminho)
+        .expect("criar ficheiro")
+        .set_len(tamanho)
+        .expect("definir tamanho");
+}
+
 fn gestor(base: &std::path::Path, uri: &str) -> ModelManager {
     ModelManager::com_fontes(
         base.to_path_buf(),
@@ -95,15 +106,43 @@ async fn descarrega_modelo_e_tokenizer() {
 }
 
 #[tokio::test]
+async fn modelo_truncado_e_substituido_no_download() {
+    let servidor = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/model.onnx"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(vec![7_u8; 4096]))
+        .mount(&servidor)
+        .await;
+
+    let pasta = tempfile::tempdir().expect("pasta temporária");
+    let gestor = gestor(pasta.path(), &servidor.uri());
+    fs::write(gestor.caminho_modelo(), vec![1_u8; 2048]).expect("modelo truncado");
+    criar_com_tamanho(gestor.caminho_tokenizer(), TAMANHO_MINIMO_TOKENIZER);
+    criar_com_tamanho(gestor.caminho_runtime(), TAMANHO_MINIMO_RUNTIME);
+
+    gestor
+        .garantir_modelo_baixado()
+        .await
+        .expect("download do modelo");
+
+    assert_eq!(
+        fs::metadata(gestor.caminho_modelo())
+            .expect("modelo existe")
+            .len(),
+        4096,
+        "o ficheiro truncado devia ter sido substituído"
+    );
+}
+
+#[tokio::test]
 async fn ficheiros_existentes_evitam_rede() {
     let pasta = tempfile::tempdir().expect("pasta temporária");
     // Porta 9 (discard) para garantir que não há download.
     let gestor = gestor(pasta.path(), "http://127.0.0.1:9");
 
-    fs::create_dir_all(pasta.path()).expect("pasta");
-    fs::write(gestor.caminho_modelo(), vec![1_u8; 2048]).expect("modelo");
-    fs::write(gestor.caminho_tokenizer(), vec![2_u8; 2048]).expect("tokenizer");
-    fs::write(gestor.caminho_runtime(), vec![3_u8; 1_000_001]).expect("runtime");
+    criar_com_tamanho(gestor.caminho_modelo(), TAMANHO_MINIMO_MODELO);
+    criar_com_tamanho(gestor.caminho_tokenizer(), TAMANHO_MINIMO_TOKENIZER);
+    criar_com_tamanho(gestor.caminho_runtime(), TAMANHO_MINIMO_RUNTIME);
 
     let resultado = gestor
         .garantir_modelo_baixado()

@@ -17,7 +17,7 @@ pub const URL_RUNTIME: &str = "https://github.com/microsoft/onnxruntime/releases
 /// Versão do runtime; tem de coincidir com a esperada pela crate ort.
 pub const VERSAO_RUNTIME: &str = "1.22.0";
 
-/// Tamanho mínimo aceitável para considerar um ficheiro descarregado.
+/// Sanidade mínima do corpo HTTP; os mínimos por artefacto estão abaixo.
 const TAMANHO_MINIMO: u64 = 1024;
 
 /// Tamanho mínimo do modelo ONNX quantizado (~121 MB no original).
@@ -108,12 +108,12 @@ impl ModelManager {
     pub async fn garantir_modelo_baixado(&self) -> Result<PathBuf, ErroNlp> {
         tokio::fs::create_dir_all(&self.base).await?;
 
-        if !ficheiro_utilizavel(&self.caminho_modelo()).await {
+        if !ficheiro_utilizavel(&self.caminho_modelo(), TAMANHO_MINIMO_MODELO).await {
             tracing::info!(url = %self.url_modelo, "a descarregar modelo de sentimento");
             self.descarregar(&self.url_modelo, &self.caminho_modelo())
                 .await?;
         }
-        if !ficheiro_utilizavel(&self.caminho_tokenizer()).await {
+        if !ficheiro_utilizavel(&self.caminho_tokenizer(), TAMANHO_MINIMO_TOKENIZER).await {
             tracing::info!(url = %self.url_tokenizer, "a descarregar tokenizer");
             self.descarregar(&self.url_tokenizer, &self.caminho_tokenizer())
                 .await?;
@@ -201,10 +201,7 @@ impl ModelManager {
 }
 
 async fn runtime_utilizavel(caminho: &Path) -> bool {
-    matches!(
-        tokio::fs::metadata(caminho).await,
-        Ok(metadados) if metadados.is_file() && metadados.len() >= TAMANHO_MINIMO_RUNTIME
-    )
+    ficheiro_utilizavel(caminho, TAMANHO_MINIMO_RUNTIME).await
 }
 
 /// Extrai libonnxruntime.so.NNNN do tarball oficial para destino.
@@ -244,10 +241,10 @@ fn extrair_runtime(origem: &Path, destino: &Path) -> Result<(), ErroNlp> {
     })
 }
 
-async fn ficheiro_utilizavel(caminho: &Path) -> bool {
+async fn ficheiro_utilizavel(caminho: &Path, tamanho_minimo: u64) -> bool {
     matches!(
         tokio::fs::metadata(caminho).await,
-        Ok(metadados) if metadados.is_file() && metadados.len() >= TAMANHO_MINIMO
+        Ok(metadados) if metadados.is_file() && metadados.len() >= tamanho_minimo
     )
 }
 

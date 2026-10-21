@@ -147,7 +147,9 @@ impl DesktopApp {
 
     fn poll_relatorio(&mut self, ctx: &egui::Context) {
         // Detecta um modelo descarregado pela CLI sem reiniciar a GUI.
-        self.state.refresh_nlp_modelo_pronto();
+        if self.state.ecra == Ecra::Relatorio {
+            self.state.refresh_nlp_modelo_pronto();
+        }
         let estado = std::mem::replace(&mut self.state.relatorio, EstadoRelatorio::Ocioso);
         match estado {
             EstadoRelatorio::EmGeracao { mut rx } => match rx.try_recv() {
@@ -189,9 +191,14 @@ impl DesktopApp {
                 self.state.nlp_progresso_msg = None;
                 match evento {
                     EventoNlp::ModeloPronto => {
-                        self.state.nlp_modelo_pronto = true;
-                        self.state.refresh_nlp_pendentes();
-                        self.state.toast("Modelo NLP pronto");
+                        self.state.refresh_nlp_modelo_pronto();
+                        if self.state.nlp_modelo_pronto {
+                            self.state.toast("Modelo NLP pronto");
+                        } else {
+                            self.state.toast(
+                                "Download concluído, mas os ficheiros do modelo não são válidos",
+                            );
+                        }
                     }
                     EventoNlp::AnaliseConcluida {
                         analisados,

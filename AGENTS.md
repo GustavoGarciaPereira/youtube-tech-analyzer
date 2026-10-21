@@ -111,6 +111,9 @@ text
   serializado; o semáforo do caso de uso paraleliza tokenização/IO, não ONNX.
 - Modelo CardiffNLP `twitter-roberta-base-sentiment-latest` (Xenova, INT8),
   licença CC-BY-4.0: exige atribuição quando a funcionalidade for exposta.
+- O `ModelManager` exige: `model.onnx` >= 50 MB, `tokenizer.json` >= 100 KB,
+  `libonnxruntime.so` >= 1 MB. Qualquer validação de integridade deve usar
+  estes limiares, nunca o `TAMANHO_MINIMO` genérico de 1 KB.
 - `versao_modelo` actual: `roberta-sentiment-int8-v1`. Mudar de modelo exige
   uma versão nova; as linhas antigas ficam para reprodutibilidade.
 
