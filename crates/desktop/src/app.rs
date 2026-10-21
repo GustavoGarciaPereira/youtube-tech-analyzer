@@ -700,12 +700,16 @@ impl DesktopApp {
                 ui.label("Clica em \"Gerar relatório\" para analisar o canal.");
             }
             EstadoRelatorio::Pronto(relatorio) => {
-                render_relatorio(
-                    ui,
-                    relatorio.as_ref(),
-                    self.state.metrica_plot,
-                    self.state.escala_log,
-                );
+                // O relatório é mais alto que a janela; sem scroll a secção
+                // de diagnóstico e os avisos ficavam inalcançáveis.
+                egui::ScrollArea::vertical().show(ui, |ui| {
+                    render_relatorio(
+                        ui,
+                        relatorio.as_ref(),
+                        self.state.metrica_plot,
+                        self.state.escala_log,
+                    );
+                });
             }
         }
     }
@@ -988,9 +992,22 @@ fn render_plot(ui: &mut egui::Ui, tendencia: &TendenciaMetrica, escala_log: bool
 
     // O egui_plot 0.29 não tem eixo logarítmico nativo: transformamos os
     // valores para ln antes de plotar e revertemos no formatter do eixo Y.
+    // O piso é o menor valor positivo da série (não 1e-9): um único zero em
+    // likes/views esticaria o eixo até ln(1e-9) e esmagaria tudo o resto.
+    let piso = tendencia
+        .pontos
+        .iter()
+        .map(|(_, valor)| *valor)
+        .filter(|valor| *valor > 0.0)
+        .fold(f64::INFINITY, f64::min);
+    let piso = if piso.is_finite() && piso > 0.0 {
+        piso
+    } else {
+        1e-9
+    };
     let transformar = |valor: f64| {
         if escala_log {
-            valor.max(1e-9).ln()
+            valor.max(piso).ln()
         } else {
             valor
         }
@@ -1000,7 +1017,13 @@ fn render_plot(ui: &mut egui::Ui, tendencia: &TendenciaMetrica, escala_log: bool
         .pontos
         .iter()
         .enumerate()
-        .map(|(indice, (_, valor))| [indice as f64, transformar(*valor)])
+        .filter_map(|(indice, (_, valor))| {
+            if escala_log && *valor <= 0.0 {
+                // Um zero não tem log: fica fora do gráfico em vez de virar pico.
+                return None;
+            }
+            Some([indice as f64, transformar(*valor)])
+        })
         .collect();
     let datas = tendencia.pontos.clone();
     let x_final = (n - 1) as f64;
