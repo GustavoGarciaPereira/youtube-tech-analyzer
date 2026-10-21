@@ -132,6 +132,29 @@ impl ModelManager {
             let _ = tokio::fs::remove_file(&arquivo).await;
         }
 
+        // Pós-condição: um 200 OK com corpo curto e sem Content-Length não
+        // chega; a promessa só é cumprida se os três artefactos passarem nos
+        // mínimos de tamanho.
+        if !self.modelo_pronto() {
+            let tamanho = |caminho: &Path| {
+                std::fs::metadata(caminho)
+                    .map(|metadados| metadados.len())
+                    .unwrap_or(0)
+            };
+            return Err(ErroNlp::FicheiroInvalido {
+                caminho: self.base.display().to_string(),
+                motivo: format!(
+                    "artefactos inválidos após o download: model.onnx={} B (mín. {}), tokenizer.json={} B (mín. {}), libonnxruntime.so={} B (mín. {})",
+                    tamanho(&self.caminho_modelo()),
+                    TAMANHO_MINIMO_MODELO,
+                    tamanho(&self.caminho_tokenizer()),
+                    TAMANHO_MINIMO_TOKENIZER,
+                    tamanho(&self.caminho_runtime()),
+                    TAMANHO_MINIMO_RUNTIME,
+                ),
+            });
+        }
+
         Ok(self.base.clone())
     }
 

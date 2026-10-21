@@ -69,7 +69,7 @@ async fn corpo_demasiado_pequeno_e_rejeitado() {
 }
 
 #[tokio::test]
-async fn descarrega_modelo_e_tokenizer() {
+async fn download_curto_e_rejeitado_pela_pos_condicao() {
     let servidor = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/model.onnx"))
@@ -85,12 +85,15 @@ async fn descarrega_modelo_e_tokenizer() {
     let pasta = tempfile::tempdir().expect("pasta temporária");
     let gestor = gestor(pasta.path(), &servidor.uri());
     fs::write(gestor.caminho_runtime(), vec![0_u8; 1_000_001]).expect("runtime");
-    let resultado = gestor
+    let erro = gestor
         .garantir_modelo_baixado()
         .await
-        .expect("download completo");
+        .expect_err("download curto deve ser rejeitado pela pós-condição");
 
-    assert_eq!(resultado, pasta.path());
+    assert!(
+        matches!(erro, ErroNlp::FicheiroInvalido { .. }),
+        "erro inesperado: {erro}"
+    );
     assert_eq!(
         fs::metadata(gestor.caminho_modelo())
             .expect("modelo existe")
@@ -120,11 +123,15 @@ async fn modelo_truncado_e_substituido_no_download() {
     criar_com_tamanho(gestor.caminho_tokenizer(), TAMANHO_MINIMO_TOKENIZER);
     criar_com_tamanho(gestor.caminho_runtime(), TAMANHO_MINIMO_RUNTIME);
 
-    gestor
+    let erro = gestor
         .garantir_modelo_baixado()
         .await
-        .expect("download do modelo");
+        .expect_err("modelo de 4 KB não cumpre o mínimo");
 
+    assert!(
+        matches!(erro, ErroNlp::FicheiroInvalido { .. }),
+        "erro inesperado: {erro}"
+    );
     assert_eq!(
         fs::metadata(gestor.caminho_modelo())
             .expect("modelo existe")
