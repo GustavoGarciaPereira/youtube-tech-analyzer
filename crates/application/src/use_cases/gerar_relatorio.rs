@@ -11,10 +11,17 @@ use tokio::task::JoinSet;
 
 use crate::errors::ErroAplicacao;
 use crate::relatorio::{
-    ComparacaoPares, MetadadosReproducao, RelatorioCanal, RelatorioConfig, TendenciaMetrica,
+    ComparacaoPares, MetadadosReproducao, ModoAnalise, RelatorioCanal, RelatorioConfig,
+    TendenciaMetrica,
 };
 
 const CONCORRENCIA_LOTE: usize = 4;
+
+/// Abaixo deste número de pares o percentil não é fiável.
+const MIN_PARES_COMPARACAO: usize = 10;
+
+/// Série de pontos `(data, valor)` acompanhada dos avisos de qualidade.
+type SerieCarregada = (Vec<(NaiveDate, f64)>, Vec<String>);
 
 /// Caso de uso que gera relatórios estatísticos de canais.
 pub struct GerarRelatorioUseCase {
@@ -150,17 +157,58 @@ async fn gerar_relatorio(
     let mut tendencias = Vec::new();
     let mut periodo_inicio: Option<NaiveDate> = None;
     let mut periodo_fim: Option<NaiveDate> = None;
+    let nome_pontos = match config.modo {
+        ModoAnalise::PorColeta => "snapshots",
+        ModoAnalise::PorPublicacao => "vídeos",
+    };
+
+    // Metodologia do modo cross-section: repetida uma vez, não por métrica.
+    if config.modo == ModoAnalise::PorPublicacao {
+        avisos.push(
+            "análise por publicação (cross-section): cada vídeo é um ponto; o slope é medido por vídeo publicado, não por dia de coleta."
+                .to_owned(),
+        );
+        avisos.push(
+            "cada vídeo contribui com as métricas do seu último snapshot; vídeos nunca re-coletados mantêm valores antigos."
+                .to_owned(),
+        );
+        if config.views_por_dia {
+            avisos.push(
+                "normalização por idade ativa: visualizações em views/dia desde a publicação e engagement em rácio sobre visualizações."
+                    .to_owned(),
+            );
+        }
+        avisos.push(format!(
+            "vídeos com menos de {} dias são excluídos (idade_minima_dias).",
+            config.idade_minima_dias
+        ));
+    }
 
     for metrica in &config.metricas {
-        let snapshots =
-            repositorio.listar_serie_temporal(EntidadeTipo::Canal, canal.id.as_str(), *metrica)?;
-        let (mut serie, avisos_serie) = converter_serie(&snapshots, *metrica);
-        avisos.extend(avisos_serie);
-        aplicar_periodo(&mut serie, config.periodo_dias)?;
+        let (serie, avisos_serie) = match config.modo {
+            ModoAnalise::PorColeta => {
+                let snapshots = repositorio.listar_serie_temporal(
+                    EntidadeTipo::Canal,
+                    canal.id.as_str(),
+                    *metrica,
+                )?;
+                let (mut serie, avisos) = converter_serie(&snapshots, *metrica);
+                aplicar_periodo(&mut serie, config.periodo_dias)?;
+                (serie, avisos)
+            }
+            ModoAnalise::PorPublicacao => {
+                carregar_por_publicacao(repositorio.as_ref(), &canal.id, *metrica, &config)?
+            }
+        };
+        for aviso in avisos_serie {
+            if !avisos.contains(&aviso) {
+                avisos.push(aviso);
+            }
+        }
 
         if serie.len() < config.min_snapshots {
             avisos.push(format!(
-                "métrica {}: apenas {} snapshots, mínimo {}",
+                "métrica {}: apenas {} {nome_pontos}, mínimo {}",
                 metrica.as_str(),
                 serie.len(),
                 config.min_snapshots
@@ -219,6 +267,8 @@ async fn gerar_relatorio(
             slope_ic95: ts.slope_ic95,
             pontos: serie.clone(),
             amostra_suficiente: serie.len() >= config.aviso_amostra_minima,
+            eixo_temporal: config.modo.eixo_temporal().to_owned(),
+            unidade_slope: unidade_slope(config.modo, *metrica, config.views_por_dia),
         });
     }
 
@@ -232,6 +282,16 @@ async fn gerar_relatorio(
     let periodo_inicio = periodo_inicio.unwrap_or_else(|| Utc::now().date_naive());
     let periodo_fim = periodo_fim.unwrap_or(periodo_inicio);
 
+    if config.modo == ModoAnalise::PorPublicacao
+        && config.periodo_dias.is_none()
+        && periodo_fim.signed_duration_since(periodo_inicio).num_days() > 730
+    {
+        avisos.push(
+            "os vídeos abrangem mais de dois anos de publicações: parte do slope pode vir da maturação dos vídeos, não do canal. Considera restringir com --periodo-dias 365."
+                .to_owned(),
+        );
+    }
+
     let comparacoes =
         construir_comparacoes(&repositorio, &canal.id, &tendencias, &config, &mut avisos)?;
 
@@ -239,6 +299,7 @@ async fn gerar_relatorio(
         canal,
         periodo_inicio,
         periodo_fim,
+        modo: config.modo,
         tendencias,
         comparacoes,
         avisos,
@@ -246,6 +307,159 @@ async fn gerar_relatorio(
         nivel_significancia: config.nivel_significancia,
         aviso_amostra_minima: config.aviso_amostra_minima,
     })
+}
+
+/// Carrega a cross-section de um canal usando `publicado_em` como eixo.
+///
+/// Aplica `idade_minima_dias` e `periodo_dias` (este último sobre a data de
+/// publicação) e normaliza os valores quando `views_por_dia` está ativo.
+fn carregar_por_publicacao(
+    repositorio: &dyn RepositorioDeCanais,
+    canal_id: &CanalId,
+    metrica: Metrica,
+    config: &RelatorioConfig,
+) -> Result<SerieCarregada, ErroAplicacao> {
+    if !metrica_por_publicacao(metrica) {
+        return Err(ErroAplicacao::ConfigInvalida(format!(
+            "métrica {} não é analisável por publicação (só visualizações, curtidas e total de comentários); usa o modo por-coleta",
+            metrica.as_str()
+        )));
+    }
+
+    let videos = repositorio.listar_videos(canal_id)?;
+    let hoje = Utc::now().date_naive();
+    let corte = corte_periodo(config.periodo_dias)?;
+
+    let mut serie = Vec::with_capacity(videos.len());
+    let mut avisos = Vec::new();
+    let mut recentes = 0_usize;
+    let mut fora_periodo = 0_usize;
+    let mut sem_visualizacoes = 0_usize;
+    let mut datas_invalidas = 0_usize;
+
+    for video in &videos {
+        let Some(data) = parse_data(&video.publicado_em) else {
+            datas_invalidas += 1;
+            continue;
+        };
+        let idade = hoje.signed_duration_since(data).num_days();
+
+        if idade < i64::from(config.idade_minima_dias) {
+            recentes += 1;
+            continue;
+        }
+        if corte.is_some_and(|corte| data < corte) {
+            fora_periodo += 1;
+            continue;
+        }
+
+        let valor = match metrica {
+            Metrica::Visualizacoes => {
+                let views = video.visualizacoes as f64;
+                if config.views_por_dia {
+                    views / idade.max(1) as f64
+                } else {
+                    views
+                }
+            }
+            Metrica::Curtidas | Metrica::TotalComentarios => {
+                let bruto = if metrica == Metrica::Curtidas {
+                    video.curtidas as f64
+                } else {
+                    video.total_comentarios as f64
+                };
+                if config.views_por_dia {
+                    if video.visualizacoes == 0 {
+                        sem_visualizacoes += 1;
+                        continue;
+                    }
+                    bruto / video.visualizacoes as f64
+                } else {
+                    bruto
+                }
+            }
+            _ => return Err(metrica_invalida(metrica)),
+        };
+        serie.push((data, valor));
+    }
+
+    // Datas iguais (dois vídeos no mesmo dia) ordenam por valor para que a
+    // série seja determinística entre execuções.
+    serie.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.total_cmp(&b.1)));
+
+    if datas_invalidas > 0 {
+        avisos.push(format!(
+            "métrica {}: {datas_invalidas} vídeos com data de publicação inválida ignorados",
+            metrica.as_str()
+        ));
+    }
+    if recentes > 0 {
+        avisos.push(format!(
+            "métrica {}: {} por terem menos de {} dias",
+            metrica.as_str(),
+            contar(recentes, "vídeo ignorado", "vídeos ignorados"),
+            config.idade_minima_dias
+        ));
+    }
+    if fora_periodo > 0 {
+        avisos.push(format!(
+            "métrica {}: {} fora dos últimos {} dias de publicação",
+            metrica.as_str(),
+            contar(fora_periodo, "vídeo", "vídeos"),
+            config.periodo_dias.unwrap_or_default()
+        ));
+    }
+    if sem_visualizacoes > 0 {
+        avisos.push(format!(
+            "métrica {}: {} no rácio de engagement por não terem visualizações",
+            metrica.as_str(),
+            contar(sem_visualizacoes, "vídeo ignorado", "vídeos ignorados")
+        ));
+    }
+
+    Ok((serie, avisos))
+}
+
+const fn metrica_por_publicacao(metrica: Metrica) -> bool {
+    matches!(
+        metrica,
+        Metrica::Visualizacoes | Metrica::Curtidas | Metrica::TotalComentarios
+    )
+}
+
+fn contar(n: usize, singular: &str, plural: &str) -> String {
+    if n == 1 {
+        format!("1 {singular}")
+    } else {
+        format!("{n} {plural}")
+    }
+}
+
+fn metrica_invalida(metrica: Metrica) -> ErroAplicacao {
+    ErroAplicacao::ConfigInvalida(format!(
+        "métrica {} não é analisável por publicação; usa o modo por-coleta",
+        metrica.as_str()
+    ))
+}
+
+fn unidade_slope(modo: ModoAnalise, metrica: Metrica, normalizado: bool) -> String {
+    if modo == ModoAnalise::PorColeta {
+        return "por dia".to_owned();
+    }
+    let base = match metrica {
+        Metrica::Visualizacoes => "views",
+        Metrica::Curtidas => "likes",
+        Metrica::TotalComentarios => "comentários",
+        outra => outra.as_str(),
+    };
+    if !normalizado {
+        return format!("{base} por vídeo");
+    }
+    if metrica == Metrica::Visualizacoes {
+        "views/dia por vídeo".to_owned()
+    } else {
+        format!("{base}/views por vídeo")
+    }
 }
 
 fn construir_comparacoes(
@@ -259,7 +473,7 @@ fn construir_comparacoes(
     todos.retain(|canal| &canal.id != canal_id);
     let ha_outros_canais = !todos.is_empty();
 
-    // O baseline usa a categoria manual. `nicho_do_canal` fica reservado ao
+    // O baseline usa a categoria manual. nicho_do_canal fica reservado ao
     // futuro classificador de nicho e não é consultado neste caminho.
     let categoria = repositorio.categoria_manual_do_canal(canal_id)?;
     let (pares, grupo) = match categoria {
@@ -295,55 +509,135 @@ fn construir_comparacoes(
 
     let mut comparacoes = Vec::new();
     for tendencia in tendencias {
-        let mut slopes = Vec::new();
+        // Sem uma mediana positiva não há forma de retirar a escala do canal.
+        let Some(fator) = fator_normalizacao(&tendencia.pontos) else {
+            aviso_unico(
+                avisos,
+                format!(
+                    "métrica {}: mediana da série é zero; comparação com pares indisponível",
+                    tendencia.metrica.as_str()
+                ),
+            );
+            continue;
+        };
+        let slope_relativo_canal = tendencia.slope_theil_sen / fator;
+
+        let mut absolutos = Vec::new();
+        let mut relativos = Vec::new();
         for par in &pares {
-            let snapshots = repositorio.listar_serie_temporal(
-                EntidadeTipo::Canal,
-                par.id.as_str(),
-                tendencia.metrica,
-            )?;
-            let (mut serie, _) = converter_serie(&snapshots, tendencia.metrica);
-            aplicar_periodo(&mut serie, config.periodo_dias)?;
+            let serie = match config.modo {
+                ModoAnalise::PorColeta => {
+                    let snapshots = repositorio.listar_serie_temporal(
+                        EntidadeTipo::Canal,
+                        par.id.as_str(),
+                        tendencia.metrica,
+                    )?;
+                    let (mut serie, _) = converter_serie(&snapshots, tendencia.metrica);
+                    aplicar_periodo(&mut serie, config.periodo_dias)?;
+                    serie
+                }
+                ModoAnalise::PorPublicacao => {
+                    carregar_por_publicacao(
+                        repositorio.as_ref(),
+                        &par.id,
+                        tendencia.metrica,
+                        config,
+                    )?
+                    .0
+                }
+            };
             if serie.len() < 3 {
                 continue;
             }
+            let Some(fator_par) = fator_normalizacao(&serie) else {
+                continue;
+            };
             let valores: Vec<f64> = serie.iter().map(|(_, valor)| *valor).collect();
             match theil_sen(&valores) {
-                Ok(resultado) => slopes.push(resultado.slope),
+                Ok(resultado) => {
+                    absolutos.push(resultado.slope);
+                    relativos.push(resultado.slope / fator_par);
+                }
                 Err(AnalysisError::SerieCurta { .. }) => {}
                 Err(erro) => return Err(ErroAplicacao::Analise(erro)),
             }
         }
 
-        if slopes.is_empty() {
+        if relativos.is_empty() {
             continue;
         }
 
-        let n_pares = slopes.len();
-        let menores = slopes
-            .iter()
-            .filter(|slope| **slope < tendencia.slope_theil_sen)
-            .count();
-        let mediana = mediana(&mut slopes).ok_or_else(|| {
+        let n_pares = relativos.len();
+        let slope_mediano_pares = mediana(&mut absolutos).ok_or_else(|| {
             ErroAplicacao::SemDados("sem declives de pares para comparar".to_owned())
         })?;
+        let slope_mediano_pares_relativo = mediana(&mut relativos)
+            .ok_or_else(|| ErroAplicacao::SemDados("sem declives relativos de pares".to_owned()))?;
+
+        let percentil_canal_entre_pares = if n_pares >= MIN_PARES_COMPARACAO {
+            Some(percentil(&relativos, slope_relativo_canal))
+        } else {
+            aviso_unico(
+                avisos,
+                format!(
+                    "apenas {n_pares} pares {}; comparação estatisticamente não fiável (mínimo {MIN_PARES_COMPARACAO})",
+                    grupo_legivel(&grupo)
+                ),
+            );
+            None
+        };
 
         comparacoes.push(ComparacaoPares {
             grupo: grupo.clone(),
             n_pares,
-            slope_mediano_pares: mediana,
+            slope_mediano_pares,
             slope_canal: tendencia.slope_theil_sen,
-            percentil_canal_entre_pares: (menores as f64 / n_pares as f64) * 100.0,
+            fator_normalizacao: fator,
+            slope_canal_relativo: slope_relativo_canal,
+            slope_mediano_pares_relativo,
+            percentil_canal_entre_pares,
         });
     }
 
     Ok(comparacoes)
 }
 
-fn converter_serie(
-    snapshots: &[Snapshot],
-    metrica: Metrica,
-) -> (Vec<(NaiveDate, f64)>, Vec<String>) {
+fn grupo_legivel(grupo: &str) -> String {
+    if grupo == "todos" {
+        return "na base de dados".to_owned();
+    }
+    if let Some(categoria) = grupo.strip_prefix("categoria:") {
+        return format!("na categoria '{categoria}'");
+    }
+    format!("no grupo '{grupo}'")
+}
+
+fn fator_normalizacao(pontos: &[(NaiveDate, f64)]) -> Option<f64> {
+    let mut valores: Vec<f64> = pontos.iter().map(|(_, valor)| *valor).collect();
+    let mediana = mediana(&mut valores)?;
+    if mediana.is_finite() && mediana > 0.0 {
+        Some(mediana)
+    } else {
+        None
+    }
+}
+
+fn percentil(valores: &[f64], alvo: f64) -> f64 {
+    if valores.is_empty() {
+        return 0.0;
+    }
+    let menores = valores.iter().filter(|valor| **valor < alvo).count();
+    let iguais = valores.iter().filter(|valor| **valor == alvo).count();
+    ((menores as f64 + iguais as f64 / 2.0) / valores.len() as f64) * 100.0
+}
+
+fn aviso_unico(avisos: &mut Vec<String>, texto: String) {
+    if !avisos.contains(&texto) {
+        avisos.push(texto);
+    }
+}
+
+fn converter_serie(snapshots: &[Snapshot], metrica: Metrica) -> SerieCarregada {
     let mut serie = Vec::new();
     let mut avisos = Vec::new();
 
@@ -375,15 +669,21 @@ fn parse_data(valor: &str) -> Option<NaiveDate> {
         })
 }
 
+fn corte_periodo(periodo_dias: Option<u32>) -> Result<Option<NaiveDate>, ErroAplicacao> {
+    let Some(dias) = periodo_dias else {
+        return Ok(None);
+    };
+    let hoje = Utc::now().date_naive();
+    hoje.checked_sub_days(Days::new(u64::from(dias)))
+        .map(Some)
+        .ok_or_else(|| ErroAplicacao::ConfigInvalida("periodo_dias inválido".to_owned()))
+}
+
 fn aplicar_periodo(
     serie: &mut Vec<(NaiveDate, f64)>,
     periodo_dias: Option<u32>,
 ) -> Result<(), ErroAplicacao> {
-    if let Some(dias) = periodo_dias {
-        let hoje = Utc::now().date_naive();
-        let corte = hoje
-            .checked_sub_days(Days::new(u64::from(dias)))
-            .ok_or_else(|| ErroAplicacao::ConfigInvalida("periodo_dias inválido".to_owned()))?;
+    if let Some(corte) = corte_periodo(periodo_dias)? {
         serie.retain(|(data, _)| *data >= corte);
     }
     Ok(())
@@ -435,7 +735,7 @@ mod tests {
 
     use super::aplicar_fdr;
     use crate::relatorio::{
-        MetadadosReproducao, RelatorioCanal, RelatorioConfig, TendenciaMetrica,
+        MetadadosReproducao, ModoAnalise, RelatorioCanal, RelatorioConfig, TendenciaMetrica,
     };
     use analysis::Direcao;
     use domain::entities::canal::Canal;
@@ -455,6 +755,8 @@ mod tests {
             slope_ic95: (0.9, 1.1),
             pontos: Vec::new(),
             amostra_suficiente: true,
+            eixo_temporal: "data_coleta".to_owned(),
+            unidade_slope: "por dia".to_owned(),
         }
     }
 
@@ -473,6 +775,7 @@ mod tests {
             },
             periodo_inicio: NaiveDate::from_ymd_opt(2024, 1, 1).expect("data válida"),
             periodo_fim: NaiveDate::from_ymd_opt(2024, 1, 30).expect("data válida"),
+            modo: ModoAnalise::PorColeta,
             tendencias: p_values.iter().map(|p| tendencia(*p)).collect(),
             comparacoes: Vec::new(),
             avisos: Vec::new(),
@@ -515,5 +818,8 @@ mod tests {
         assert_eq!(config.aviso_amostra_minima, 20);
         assert_eq!(config.nivel_significancia, 0.05);
         assert_eq!(config.metricas.len(), 3);
+        assert_eq!(config.modo, ModoAnalise::PorColeta);
+        assert_eq!(config.idade_minima_dias, 7);
+        assert!(config.views_por_dia);
     }
 }

@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use application::{EventoProgresso, RelatorioCanal, RelatorioColeta};
+use application::{EventoProgresso, ModoAnalise, RelatorioCanal, RelatorioColeta};
 use domain::{CanalId, CategoriaManual, Metrica};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
@@ -235,6 +235,8 @@ pub struct AppState {
     pub formato_export: FormatoExport,
     /// Período de análise.
     pub periodo_dias: Option<u32>,
+    /// Eixo temporal usado no relatório.
+    pub modo_analise: ModoAnalise,
     /// Métrica selecionada no gráfico.
     pub metrica_plot: Option<Metrica>,
     /// Instante da primeira alteração de preferências ainda não guardada.
@@ -257,6 +259,11 @@ impl AppState {
             .and_then(FormatoExport::de_str)
             .unwrap_or(FormatoExport::Md);
         let periodo_dias = prefs.periodo_dias_default;
+        let modo_analise = prefs
+            .modo_analise_default
+            .as_deref()
+            .and_then(ModoAnalise::de_str)
+            .unwrap_or(ModoAnalise::PorColeta);
 
         let mut state = Self {
             deps,
@@ -273,6 +280,7 @@ impl AppState {
             add_rx: None,
             formato_export,
             periodo_dias,
+            modo_analise,
             metrica_plot: Some(Metrica::Visualizacoes),
             prefs_pendente_desde: None,
         };
@@ -360,6 +368,7 @@ impl AppState {
         self.prefs.ultimo_ecra = Some(self.ecra.como_str().to_owned());
         self.prefs.formato_export_default = Some(self.formato_export.como_str().to_owned());
         self.prefs.periodo_dias_default = self.periodo_dias;
+        self.prefs.modo_analise_default = Some(self.modo_analise.como_str().to_owned());
         if let Err(erro) = self.prefs.guardar() {
             self.toast(format!("Erro ao guardar preferências: {erro}"));
         }

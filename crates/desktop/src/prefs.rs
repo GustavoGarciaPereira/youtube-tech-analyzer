@@ -14,6 +14,8 @@ pub struct Preferencias {
     pub formato_export_default: Option<String>,
     /// Período de análise por omissão.
     pub periodo_dias_default: Option<u32>,
+    /// Modo de análise por omissão (`por_coleta` ou `por_publicacao`).
+    pub modo_analise_default: Option<String>,
 }
 
 /// Caminho de `prefs.toml`.

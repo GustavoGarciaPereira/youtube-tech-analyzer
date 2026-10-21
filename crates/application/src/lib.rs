@@ -15,6 +15,7 @@ pub use config::ColetaConfig;
 pub use errors::ErroAplicacao;
 pub use eventos::{EventoProgresso, FalhaVideo, RelatorioColeta};
 pub use relatorio::{
-    ComparacaoPares, MetadadosReproducao, RelatorioCanal, RelatorioConfig, TendenciaMetrica,
+    ComparacaoPares, MetadadosReproducao, ModoAnalise, RelatorioCanal, RelatorioConfig,
+    TendenciaMetrica,
 };
 pub use use_cases::{ColetarCanalUseCase, GerarRelatorioUseCase};

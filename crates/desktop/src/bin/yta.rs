@@ -6,7 +6,7 @@ use anyhow::{Context, anyhow};
 use application::relatorio::export::{para_csv, para_json, para_markdown};
 use application::{
     ColetaConfig, ColetarCanalUseCase, EventoProgresso, GerarRelatorioUseCase, MetadadosReproducao,
-    RelatorioConfig,
+    ModoAnalise, RelatorioConfig,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use desktop::wiring;
@@ -45,9 +45,18 @@ enum Comando {
         /// Ficheiro de saída. Sem esta opção escreve em stdout.
         #[arg(long)]
         saida: Option<PathBuf>,
-        /// Limita a análise aos últimos N dias.
+        /// Limita a análise aos últimos N dias (coleta ou publicação, conforme --modo).
         #[arg(long)]
         periodo_dias: Option<u32>,
+        /// Eixo temporal: série de coletas ou cross-section por publicação.
+        #[arg(long, value_enum, default_value_t = ModoArg::PorColeta)]
+        modo: ModoArg,
+        /// Idade mínima dos vídeos, em dias (só em --modo por-publicacao).
+        #[arg(long, default_value_t = 7)]
+        idade_minima_dias: u32,
+        /// Não normaliza por idade no modo por-publicacao (usa valores brutos).
+        #[arg(long)]
+        sem_normalizacao: bool,
     },
     /// Informações sobre a base de dados.
     Db {
@@ -108,6 +117,23 @@ enum DbComando {
     Caminho,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+enum ModoArg {
+    /// Série temporal por dia de coleta (default).
+    PorColeta,
+    /// Cross-section por data de publicação de cada vídeo.
+    PorPublicacao,
+}
+
+impl ModoArg {
+    const fn interno(self) -> ModoAnalise {
+        match self {
+            Self::PorColeta => ModoAnalise::PorColeta,
+            Self::PorPublicacao => ModoAnalise::PorPublicacao,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, ValueEnum)]
 enum Formato {
     Md,
@@ -154,8 +180,19 @@ async fn main() -> anyhow::Result<()> {
             formato,
             saida,
             periodo_dias,
+            modo,
+            idade_minima_dias,
+            sem_normalizacao,
         } => {
-            executar_relatorio(&canal, formato, saida.as_deref(), periodo_dias, &caminho).await?;
+            let opcoes = OpcoesRelatorio {
+                formato,
+                saida,
+                periodo_dias,
+                modo: modo.interno(),
+                idade_minima_dias,
+                views_por_dia: !sem_normalizacao,
+            };
+            executar_relatorio(&canal, &opcoes, &caminho).await?;
         }
     }
 
@@ -300,17 +337,27 @@ async fn consumir_progresso(mut rx: mpsc::Receiver<EventoProgresso>) {
     }
 }
 
+struct OpcoesRelatorio {
+    formato: Formato,
+    saida: Option<PathBuf>,
+    periodo_dias: Option<u32>,
+    modo: ModoAnalise,
+    idade_minima_dias: u32,
+    views_por_dia: bool,
+}
+
 async fn executar_relatorio(
     referencia: &str,
-    formato: Formato,
-    saida: Option<&Path>,
-    periodo_dias: Option<u32>,
+    opcoes: &OpcoesRelatorio,
     caminho: &Path,
 ) -> anyhow::Result<()> {
     let repositorio = wiring::abrir_repositorio(caminho)?;
     let canal_id = resolver_canal_local(repositorio.as_ref(), referencia)?;
     let config = RelatorioConfig {
-        periodo_dias,
+        periodo_dias: opcoes.periodo_dias,
+        modo: opcoes.modo,
+        idade_minima_dias: opcoes.idade_minima_dias,
+        views_por_dia: opcoes.views_por_dia,
         ..RelatorioConfig::default()
     };
     let caso = GerarRelatorioUseCase::new(repositorio, config);
@@ -318,13 +365,13 @@ async fn executar_relatorio(
     let metadados = MetadadosReproducao::new(infra_storage::VERSAO_SCHEMA, Some(comando));
     let relatorio = caso.executar(&canal_id, metadados).await?;
 
-    let conteudo = match formato {
+    let conteudo = match opcoes.formato {
         Formato::Md => para_markdown(&relatorio),
         Formato::Csv => para_csv(&relatorio),
         Formato::Json => para_json(&relatorio)?,
     };
 
-    if let Some(saida) = saida {
+    if let Some(saida) = opcoes.saida.as_deref() {
         std::fs::write(saida, conteudo).with_context(|| format!("escrever {}", saida.display()))?;
         eprintln!("Relatório escrito em {}", saida.display());
     } else {

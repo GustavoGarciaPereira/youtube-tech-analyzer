@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 use analysis::Direcao;
 use application::relatorio::export::{para_csv, para_json, para_markdown};
 use application::{
-    ColetaConfig, ColetarCanalUseCase, GerarRelatorioUseCase, MetadadosReproducao, RelatorioCanal,
-    RelatorioConfig, TendenciaMetrica,
+    ColetaConfig, ColetarCanalUseCase, GerarRelatorioUseCase, MetadadosReproducao, ModoAnalise,
+    RelatorioCanal, RelatorioConfig, TendenciaMetrica,
 };
 use domain::{CanalId, CanalRef, CategoriaManual, Metrica};
 use eframe::egui;
@@ -328,6 +328,7 @@ impl DesktopApp {
         let repositorio = Arc::clone(&self.state.deps.repositorio);
         let config = RelatorioConfig {
             periodo_dias: self.state.periodo_dias,
+            modo: self.state.modo_analise,
             ..RelatorioConfig::default()
         };
         self.state.rt.spawn(async move {
@@ -565,6 +566,7 @@ impl DesktopApp {
 
         let mut metrica = self.state.metrica_plot;
         let mut periodo = self.state.periodo_dias;
+        let mut modo = self.state.modo_analise;
         let mut gerar = false;
         let mut copiar: Option<FormatoExport> = None;
 
@@ -587,19 +589,31 @@ impl DesktopApp {
                         }
                     });
             }
-            ui.label("Período:");
-            egui::ComboBox::from_id_salt("periodo-relatorio")
-                .selected_text(match periodo {
-                    Some(30) => "30d",
-                    Some(60) => "60d",
-                    Some(90) => "90d",
-                    _ => "Tudo",
+            ui.label("Análise:");
+            egui::ComboBox::from_id_salt("modo-relatorio")
+                .selected_text(match modo {
+                    ModoAnalise::PorColeta => "Por coleta",
+                    ModoAnalise::PorPublicacao => "Por publicação",
                 })
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut periodo, None, "Tudo");
-                    ui.selectable_value(&mut periodo, Some(30), "30d");
-                    ui.selectable_value(&mut periodo, Some(60), "60d");
-                    ui.selectable_value(&mut periodo, Some(90), "90d");
+                    ui.selectable_value(
+                        &mut modo,
+                        ModoAnalise::PorColeta,
+                        "Por coleta (série temporal)",
+                    );
+                    ui.selectable_value(
+                        &mut modo,
+                        ModoAnalise::PorPublicacao,
+                        "Por publicação (cross-section)",
+                    );
+                });
+            ui.label("Período:");
+            egui::ComboBox::from_id_salt("periodo-relatorio")
+                .selected_text(rotulo_periodo(periodo))
+                .show_ui(ui, |ui| {
+                    for (valor, rotulo) in OPCOES_PERIODO {
+                        ui.selectable_value(&mut periodo, *valor, *rotulo);
+                    }
                 });
             if ui.button("Gerar relatório").clicked() {
                 gerar = true;
@@ -624,6 +638,16 @@ impl DesktopApp {
         if periodo != self.state.periodo_dias {
             self.state.periodo_dias = periodo;
             self.state.marcar_prefs();
+        }
+        if modo != self.state.modo_analise {
+            self.state.modo_analise = modo;
+            self.state.marcar_prefs();
+        }
+        if modo == ModoAnalise::PorPublicacao {
+            ui.colored_label(
+                COR_AVISO,
+                "Análise cross-section: usa a data de publicação de cada vídeo. Complementa a série temporal, não a substitui.",
+            );
         }
         if gerar {
             self.iniciar_relatorio(ui.ctx());
@@ -708,17 +732,11 @@ impl DesktopApp {
         ui.horizontal(|ui| {
             ui.label("Período por omissão:");
             egui::ComboBox::from_id_salt("periodo-definicoes")
-                .selected_text(match periodo {
-                    Some(30) => "30d",
-                    Some(60) => "60d",
-                    Some(90) => "90d",
-                    _ => "Tudo",
-                })
+                .selected_text(rotulo_periodo(periodo))
                 .show_ui(ui, |ui| {
-                    ui.selectable_value(&mut periodo, None, "Tudo");
-                    ui.selectable_value(&mut periodo, Some(30), "30d");
-                    ui.selectable_value(&mut periodo, Some(60), "60d");
-                    ui.selectable_value(&mut periodo, Some(90), "90d");
+                    for (valor, rotulo) in OPCOES_PERIODO {
+                        ui.selectable_value(&mut periodo, *valor, *rotulo);
+                    }
                 });
         });
         if periodo != self.state.periodo_dias {
@@ -887,8 +905,11 @@ fn render_relatorio(ui: &mut egui::Ui, relatorio: &RelatorioCanal, metrica: Opti
                 ui.label(format!("{:.4}", tendencia.p_value));
                 ui.label(format!("{:.4}", tendencia.p_ajustado_fdr));
                 ui.label(format!(
-                    "{:.4} ({:.4}, {:.4})",
-                    tendencia.slope_theil_sen, tendencia.slope_ic95.0, tendencia.slope_ic95.1
+                    "{} ({}, {}) {}",
+                    application::relatorio::export::formatar_numero(tendencia.slope_theil_sen),
+                    application::relatorio::export::formatar_numero(tendencia.slope_ic95.0),
+                    application::relatorio::export::formatar_numero(tendencia.slope_ic95.1),
+                    tendencia.unidade_slope
                 ));
                 ui.end_row();
             }
@@ -900,8 +921,19 @@ fn render_relatorio(ui: &mut egui::Ui, relatorio: &RelatorioCanal, metrica: Opti
         ui.label("Sem pares comparáveis.");
     } else {
         for comparacao in &relatorio.comparacoes {
-            ui.label(texto_comparacao(comparacao));
+            ui.label(application::relatorio::export::texto_comparacao(comparacao));
         }
+    }
+
+    if relatorio.modo == ModoAnalise::PorPublicacao {
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(
+                "Nota: views/dia é um proxy com viés conhecido — vídeos recentes concentram as visualizações nos primeiros dias, o que infla o slope. O rácio likes/views é independente da idade e é o sinal mais robusto.",
+            )
+            .small()
+            .weak(),
+        );
     }
 
     if !relatorio.avisos.is_empty() {
@@ -987,50 +1019,26 @@ fn render_plot(ui: &mut egui::Ui, tendencia: &TendenciaMetrica) {
 /// Sumário curto do relatório para a GUI.
 #[must_use]
 pub fn formatar_sumario(relatorio: &RelatorioCanal) -> String {
-    let total = relatorio.tendencias.len();
-    if total == 0 {
-        return format!(
-            "No período de {} a {}, não foi possível analisar nenhuma métrica: são necessários pelo menos 5 snapshots em dias distintos por métrica (valor por omissão). Snapshots de vídeos do mesmo dia são observações do mesmo instante, não uma série temporal. Vê os avisos.",
-            relatorio.periodo_inicio, relatorio.periodo_fim
-        );
-    }
+    application::relatorio::export::texto_sumario(relatorio)
+}
 
-    let significativas: Vec<&TendenciaMetrica> = relatorio
-        .tendencias
+/// Opções de período disponíveis na GUI (dias, rótulo).
+const OPCOES_PERIODO: &[(Option<u32>, &str)] = &[
+    (None, "Tudo"),
+    (Some(30), "30d"),
+    (Some(60), "60d"),
+    (Some(90), "90d"),
+    (Some(180), "180d"),
+    (Some(365), "365d"),
+    (Some(730), "730d"),
+];
+
+fn rotulo_periodo(periodo: Option<u32>) -> &'static str {
+    OPCOES_PERIODO
         .iter()
-        .filter(|tendencia| tendencia.p_ajustado_fdr < relatorio.nivel_significancia)
-        .collect();
-
-    if significativas.is_empty() {
-        return format!(
-            "No período de {} a {}, nenhuma das {} métricas analisadas apresenta tendência estatisticamente significativa.",
-            relatorio.periodo_inicio, relatorio.periodo_fim, total
-        );
-    }
-
-    let direcao = if significativas
-        .iter()
-        .all(|tendencia| tendencia.direcao == Direcao::Crescente)
-    {
-        "crescente"
-    } else if significativas
-        .iter()
-        .all(|tendencia| tendencia.direcao == Direcao::Decrescente)
-    {
-        "decrescente"
-    } else {
-        "mista"
-    };
-
-    format!(
-        "No período de {} a {}, {} de {} métricas analisadas apresentam tendência {} estatisticamente significativa (p<{} após FDR).",
-        relatorio.periodo_inicio,
-        relatorio.periodo_fim,
-        significativas.len(),
-        total,
-        direcao,
-        relatorio.nivel_significancia
-    )
+        .find(|(valor, _)| *valor == periodo)
+        .map(|(_, rotulo)| *rotulo)
+        .unwrap_or("Tudo")
 }
 
 /// Cor associada a uma direção.
@@ -1054,29 +1062,13 @@ fn direcao_str(direcao: Direcao) -> &'static str {
     }
 }
 
-fn texto_comparacao(comparacao: &application::ComparacaoPares) -> String {
-    let grupo = if comparacao.grupo == "todos" {
-        "na base de dados".to_owned()
-    } else if let Some(categoria) = comparacao.grupo.strip_prefix("categoria:") {
-        format!("da categoria `{categoria}`")
-    } else {
-        format!("do grupo `{}`", comparacao.grupo)
-    };
-    format!(
-        "O slope do canal ({:.4}) está no percentil {:.1} face a {} canais {}. Mediana dos pares: {:.4}.",
-        comparacao.slope_canal,
-        comparacao.percentil_canal_entre_pares,
-        comparacao.n_pares,
-        grupo,
-        comparacao.slope_mediano_pares
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::{cor_direcao, formatar_sumario};
     use analysis::Direcao;
-    use application::{ComparacaoPares, MetadadosReproducao, RelatorioCanal, TendenciaMetrica};
+    use application::{
+        ComparacaoPares, MetadadosReproducao, ModoAnalise, RelatorioCanal, TendenciaMetrica,
+    };
     use chrono::{NaiveDate, Utc};
     use domain::entities::canal::Canal;
     use domain::ids::CanalId;
@@ -1097,6 +1089,7 @@ mod tests {
             },
             periodo_inicio: NaiveDate::from_ymd_opt(2024, 1, 1).expect("data"),
             periodo_fim: NaiveDate::from_ymd_opt(2024, 1, 30).expect("data"),
+            modo: ModoAnalise::PorColeta,
             tendencias,
             comparacoes: Vec::<ComparacaoPares>::new(),
             avisos: Vec::new(),
