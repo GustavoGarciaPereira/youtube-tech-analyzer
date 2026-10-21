@@ -4,7 +4,7 @@
 Pipeline de ETL em Rust para análise de canais de tecnologia do YouTube.
 Objetivo: determinar se canais de tecnologia estão a migrar para nichos como
 programação e educação, através de snapshots históricos de metadados,
-comentários e classificação de nicho.
+comentários, classificação de nicho e análise de sentimento local (NLP).
 
 ## 2. Arquitetura (Clean/Hexagonal)
 Workspace Cargo com separação rígida de responsabilidades. As dependências
@@ -13,10 +13,10 @@ apontam SEMPRE para dentro (em direção ao domínio).
 - `crates/domain`: Entidades puras (`Canal`, `Video`, `Comentario`, `Snapshot`)
   e traits/portas (`Coletor`, `Repositorio`, `Classificador`). **Não depende de
   nenhum outro crate do workspace.** Sem IO, sem rede, sem base de dados.
-- `crates/application`: Casos de uso (`ColetarCanal`, `GerarRelatorio`) que
-  orquestram as portas. Depende apenas de `domain`.
-- `crates/infra-*` (`infra-youtube`, `infra-storage`, `infra-ai`): Implementações
-  concretas das portas. Dependem de `domain`.
+- `crates/application`: Casos de uso (`ColetarCanal`, `GerarRelatorio`,
+  `AnalisarSentimentos`) que orquestram as portas. Depende apenas de `domain`.
+- `crates/infra-*` (`infra-youtube`, `infra-storage`, `infra-ai`, `infra-nlp`):
+  Implementações concretas das portas. Dependem de `domain`.
 - `crates/desktop`: lib de composição + GUI `egui`, com os binários
   `desktop` (GUI) e `yta` (CLI). É o *composition root*: injeta as
   implementações concretas nos casos de uso.
@@ -32,6 +32,8 @@ apontam SEMPRE para dentro (em direção ao domínio).
 - **Formatação**: `cargo fmt --all`
 - **Executar a app desktop**: `cargo run -p desktop --bin desktop`
 - **Executar a CLI**: `cargo run -p desktop --bin yta -- --help`
+- **Preparar o modelo de sentimento**: `yta modelos baixar-sentimento` (~143 MB)
+- **Analisar sentimentos de um canal**: `yta sentimentos <REF> [--concorrencia N]`
 
 ## 4. Convenções de Código
 - **Edição**: 2024 (definida em `[workspace.package]`).
@@ -47,7 +49,9 @@ apontam SEMPRE para dentro (em direção ao domínio).
   preserva uma linha por dia e por métrica. `data_coleta` usa `YYYY-MM-DD`
   em UTC. O marcador `Metrica::ComentariosColetados` (`entidade_tipo=video`)
   é a chave de `video_ja_coletado`; as métricas de visualizações/curtidas não
-  indicam que os comentários já foram recolhidos.
+  indicam que os comentários já foram recolhidos. `comentarios_sentimento` usa
+  PK `(comentario_id, versao_modelo)` e `ON CONFLICT DO NOTHING`: o mesmo
+  comentário pode ter uma linha por versão do modelo, sem perder histórico.
 - **Sem `unwrap()`/`expect()`** em código de produção. Use `?` e `Result`.
 
 ## 5. Estrutura de Ficheiros (resumo)
@@ -60,6 +64,7 @@ apontam SEMPRE para dentro (em direção ao domínio).
 │ ├── infra-youtube/
 │ ├── infra-storage/
 │ ├── infra-ai/
+│ ├── infra-nlp/
 │ └── desktop/
 └── tests/ # Testes de integração
 
@@ -71,6 +76,13 @@ text
   chamar `AppState`).
 - Não usar `panic!` para erros recuperáveis.
 - Não executar `cargo run` sem antes garantir que `cargo clippy` passa.
+- Não ligar o ONNX Runtime estaticamente (`ort` com `download-binaries`): os
+  binários do `ort-sys` exigem glibc >= 2.32 (rc.10) ou 2.38 (rc.15). Usar
+  `load-dynamic` e o runtime oficial descarregado em runtime.
+- Não chamar `session.run()` diretamente numa tarefa async: usar
+  `tokio::task::spawn_blocking`.
+- Não reutilizar uma `versao_modelo` para um modelo diferente; é a chave de
+  cache/re-análise em `comentarios_sentimento`.
 
 ## 7. Notas de Infraestrutura
 - `opencode.json` usa o schema V2: `permissions` é uma **lista ordenada** de
@@ -89,6 +101,18 @@ text
   `classificacoes_nicho` mantém-se para relatórios e `nicho_do_canal`.
 - Os binários `desktop` e `yta` carregam `.env` com `dotenvy` no arranque.
   Variáveis já exportadas na shell têm prioridade.
+- `infra-nlp` carrega o ONNX Runtime dinamicamente: `ort =2.0.0-rc.10` com
+  `default-features = false` e `features = ["load-dynamic"]`. O `ModelManager`
+  descarrega `model.onnx`, `tokenizer.json` e `libonnxruntime.so` (ORT 1.22.0)
+  para `XDG_DATA_HOME/yta/models/roberta-sentiment`. O `.so` oficial exige
+  glibc 2.27; não trocar para os binários estáticos do `ort-sys`.
+- A inferência é síncrona (C++): `AnalisadorDeSentimento::analisar` corre em
+  `spawn_blocking`. A `Session` é protegida por `Mutex`, pelo que o `run()` é
+  serializado; o semáforo do caso de uso paraleliza tokenização/IO, não ONNX.
+- Modelo CardiffNLP `twitter-roberta-base-sentiment-latest` (Xenova, INT8),
+  licença CC-BY-4.0: exige atribuição quando a funcionalidade for exposta.
+- `versao_modelo` actual: `roberta-sentiment-int8-v1`. Mudar de modelo exige
+  uma versão nova; as linhas antigas ficam para reprodutibilidade.
 
 ## 8. SQLite: DELETE/REPLACE e CASCADE
 Nunca usar `INSERT OR REPLACE` em tabelas com `ON DELETE CASCADE`. O `REPLACE`
@@ -142,3 +166,21 @@ o `hash_conteudo` tem de os incluir — senão há cache hits incorrectos.
 - Ctrl+R no ecrã Relatório regenera; exportações copiam para o clipboard.
 - O crate `desktop` tem múltiplos binários; usar sempre `--bin desktop` ou
   `--bin yta`.
+
+## 16. Análise de sentimento (NLP)
+- Porta: `domain::ports::AnalisadorDeSentimento` (`analisar` + `versao_modelo`),
+  object-safe com `BoxFuture`.
+- Value objects: `Sentimento` (`Positivo`/`Neutro`/`Negativo`) e
+  `ScoreSentimento` (score em [-1, 1] = P(pos) − P(neg)).
+- Persistência: `comentarios_sentimento`, PK `(comentario_id, versao_modelo)`,
+  `ON CONFLICT DO NOTHING`; `comentarios_sem_sentimento(canal, versao)` devolve
+  comentários sem linha para essa versão — é o que permite re-análise.
+- Caso de uso: `AnalisarSentimentosUseCase` com `AnalisarConfig`
+  (`concorrencia = num_cpus::get() - 1`, mínimo 2). Falhas individuais contam
+  como `falhados` e não abortam o lote; o comentário fica pendente.
+- `total_comentarios` no relatório = pendentes para a versão actual, não o
+  total histórico do canal.
+- Ordem de classes do modelo: `[negativo, neutro, positivo]` (0/1/2). Validar
+  com inferência real ao trocar de modelo.
+- Teste de inferência real está `#[ignore]`; o CI nunca descarrega o modelo.
+  Correr com `cargo test -p infra-nlp --test inferencia -- --ignored`.
