@@ -4,21 +4,30 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](https://www.rust-lang.org)
 
-## Screenshot
+## Screenshots
 
 ### Relatório com escala logarítmica
 
-Canal com 1281 vídeos, eixo por data de publicação e rácio de engagement em
-escala logarítmica: a linha Theil-Sen deixa de ser esmagada pelos outliers.
+Canal com 1281 vídeos, eixo por data de publicação e views/dia em escala
+logarítmica: a linha Theil-Sen deixa de ser esmagada pelos outliers. Abaixo
+do gráfico aparecem a análise de sentimento e os comentários pendentes.
 
 ![Relatório com escala log](docs/screenshot-1.png)
 
 ### Diagnóstico de robustez estatística
 
-A auto-auditoria mostra que o slope de views/dia varia 2062x (e inverte de
-sinal) quando a janela temporal encolhe.
+A auto-auditoria mostra que o slope de views/dia varia mais de 2000x (e
+inverte de sinal) quando a janela temporal encolhe.
 
 ![Diagnóstico de robustez](docs/screenshot-2.png)
+
+### Sentimento da comunidade
+
+Série mensal do score médio (-1 a 1), linha neutra a 0.0 e área sombreada com
+a contagem de comentários por mês. Neste canal, todos os comentários já estão
+analisados.
+
+![Sentimento da comunidade](docs/screenshot-3.png)
 
 Pipeline de ETL e análise de canais de tecnologia do YouTube, escrito em Rust.
 
