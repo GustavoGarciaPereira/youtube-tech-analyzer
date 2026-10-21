@@ -915,3 +915,95 @@ async fn por_publicacao_respeita_periodo_dias() {
             .any(|aviso| aviso.contains("fora dos últimos 365 dias"))
     );
 }
+
+#[tokio::test]
+async fn diagnostico_de_janelas_compara_janelas_em_por_publicacao() {
+    let repo = Arc::new(FakeRepositorio::new());
+    repo.guardar_canal(&canal("canal-1", "Canal"))
+        .expect("canal guardado");
+    // 10 vídeos: 5 dentro de 365d, 3 dentro de 180d.
+    for (indice, dias) in [800_u64, 700, 600, 500, 400, 350, 300, 150, 120, 60]
+        .into_iter()
+        .enumerate()
+    {
+        repo.guardar_video(&video(
+            "canal-1",
+            &format!("v{indice}"),
+            dias,
+            1_000 * (indice as u64 + 1),
+            50,
+            3,
+        ))
+        .expect("vídeo guardado");
+    }
+
+    let relatorio = executar(
+        repo,
+        config_publicacao(vec![Metrica::Visualizacoes]),
+        "canal-1",
+    )
+    .await
+    .expect("relatório por publicação");
+
+    let janelas = relatorio
+        .diagnostico_janelas
+        .as_ref()
+        .expect("diagnóstico presente");
+    assert_eq!(janelas.len(), 3);
+    assert!(janelas[0].janela_dias.is_none());
+    assert_eq!(janelas[1].janela_dias, Some(365));
+    assert_eq!(janelas[2].janela_dias, Some(180));
+    assert_eq!(janelas[0].n_snapshots, 10);
+    assert_eq!(janelas[1].n_snapshots, 5);
+    assert_eq!(janelas[2].n_snapshots, 3);
+    assert!((janelas[0].multiplicador_slope - 1.0).abs() < 1e-12);
+    assert!(
+        (janelas[1].multiplicador_slope - janelas[1].slope_views_dia / janelas[0].slope_views_dia)
+            .abs()
+            < 1e-12
+    );
+}
+
+#[tokio::test]
+async fn markdown_tem_diagnostico_apenas_em_por_publicacao() {
+    let repo = Arc::new(FakeRepositorio::new());
+    repo.guardar_canal(&canal("canal-1", "Canal"))
+        .expect("canal guardado");
+    for (indice, dias) in [800_u64, 600, 400, 350, 300, 150, 120, 60]
+        .into_iter()
+        .enumerate()
+    {
+        repo.guardar_video(&video(
+            "canal-1",
+            &format!("v{indice}"),
+            dias,
+            1_000 * (indice as u64 + 1),
+            50,
+            3,
+        ))
+        .expect("vídeo guardado");
+    }
+
+    let publicacao = executar(
+        Arc::clone(&repo),
+        config_publicacao(vec![Metrica::Visualizacoes]),
+        "canal-1",
+    )
+    .await
+    .expect("relatório por publicação");
+    let markdown = para_markdown(&publicacao);
+    assert!(markdown.contains("## Diagnóstico de Robustez (views/dia)"));
+    assert!(markdown.contains("Janela completa"));
+
+    let coleta = executar(
+        repo,
+        RelatorioConfig {
+            metricas: vec![Metrica::Visualizacoes],
+            ..RelatorioConfig::default()
+        },
+        "canal-1",
+    )
+    .await
+    .expect("relatório por coleta");
+    assert!(!para_markdown(&coleta).contains("Diagnóstico de Robustez"));
+}

@@ -16,6 +16,9 @@ pub struct Preferencias {
     pub periodo_dias_default: Option<u32>,
     /// Modo de análise por omissão (`por_coleta` ou `por_publicacao`).
     pub modo_analise_default: Option<String>,
+    /// Escala logarítmica no gráfico de tendência.
+    #[serde(default)]
+    pub log_scale: bool,
 }
 
 /// Caminho de `prefs.toml`.
@@ -55,5 +58,32 @@ impl Preferencias {
         std::fs::write(&caminho, texto)
             .with_context(|| format!("escrever {}", caminho.display()))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Preferencias;
+
+    #[test]
+    fn log_scale_faz_round_trip() {
+        let prefs = Preferencias {
+            log_scale: true,
+            ..Preferencias::default()
+        };
+        let texto = toml::to_string_pretty(&prefs).expect("serializar preferências");
+        let lido: Preferencias = toml::from_str(&texto).expect("desserializar preferências");
+        assert!(lido.log_scale);
+    }
+
+    #[test]
+    fn prefs_antigas_sem_log_scale_continuam_validas() {
+        let lido: Preferencias = toml::from_str(
+            "periodo_dias_default = 365
+",
+        )
+        .expect("prefs antigas");
+        assert!(!lido.log_scale);
+        assert_eq!(lido.periodo_dias_default, Some(365));
     }
 }

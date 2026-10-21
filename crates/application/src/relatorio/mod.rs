@@ -98,6 +98,8 @@ pub struct TendenciaMetrica {
 /// canal), para comparar trajectórias e não escalas.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ComparacaoPares {
+    /// Métrica comparada (o número de pares válidos depende dela).
+    pub metrica: Metrica,
     /// "todos" ou o nome do nicho usado no filtro.
     pub grupo: String,
     /// Número de canais pares com série utilizável.
@@ -119,6 +121,23 @@ pub struct ComparacaoPares {
     pub percentil_canal_entre_pares: Option<f64>,
 }
 
+/// Slope de views/dia numa janela de publicação, para auto-auditoria.
+///
+/// Compara a janela completa com janelas mais curtas: se o slope crescer
+/// muito quando a janela encolhe, a tendência é sensível ao divisor de idade
+/// (vídeos recentes têm views concentrados nos primeiros dias).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct DiagnosticoJanela {
+    /// Janela usada, em dias; None representa todos os vídeos.
+    pub janela_dias: Option<u32>,
+    /// Número de vídeos com série válida nessa janela.
+    pub n_snapshots: usize,
+    /// Declive Theil-Sen da série normalizada (views/dia).
+    pub slope_views_dia: f64,
+    /// Declive desta janela dividido pelo da janela completa.
+    pub multiplicador_slope: f64,
+}
+
 /// Relatório completo de um canal.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RelatorioCanal {
@@ -132,6 +151,8 @@ pub struct RelatorioCanal {
     pub modo: ModoAnalise,
     /// Tendências por métrica.
     pub tendencias: Vec<TendenciaMetrica>,
+    /// Auto-auditoria do viés de idade em views/dia, só em PorPublicacao.
+    pub diagnostico_janelas: Option<Vec<DiagnosticoJanela>>,
     /// Comparações com canais pares.
     pub comparacoes: Vec<ComparacaoPares>,
     /// Avisos metodológicos.

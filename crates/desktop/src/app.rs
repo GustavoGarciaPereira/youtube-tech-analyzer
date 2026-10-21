@@ -567,6 +567,7 @@ impl DesktopApp {
         let mut metrica = self.state.metrica_plot;
         let mut periodo = self.state.periodo_dias;
         let mut modo = self.state.modo_analise;
+        let mut escala_log = self.state.escala_log;
         let mut gerar = false;
         let mut copiar: Option<FormatoExport> = None;
 
@@ -589,6 +590,8 @@ impl DesktopApp {
                         }
                     });
             }
+            ui.checkbox(&mut escala_log, "Escala Log")
+                .on_hover_text("Eixo Y logarítmico; útil quando há outliers de views/dia.");
             ui.label("Análise:");
             egui::ComboBox::from_id_salt("modo-relatorio")
                 .selected_text(match modo {
@@ -639,8 +642,18 @@ impl DesktopApp {
             self.state.periodo_dias = periodo;
             self.state.marcar_prefs();
         }
+        if escala_log != self.state.escala_log {
+            self.state.escala_log = escala_log;
+            self.state.marcar_prefs();
+            ui.ctx().request_repaint();
+        }
         if modo != self.state.modo_analise {
             self.state.modo_analise = modo;
+            if modo == ModoAnalise::PorPublicacao {
+                // Em cross-section a primeira impressão deve ser o rácio de
+                // engagement, não views/dia dominado por outliers.
+                self.state.metrica_plot = Some(Metrica::Curtidas);
+            }
             self.state.marcar_prefs();
         }
         if modo == ModoAnalise::PorPublicacao {
@@ -687,7 +700,12 @@ impl DesktopApp {
                 ui.label("Clica em \"Gerar relatório\" para analisar o canal.");
             }
             EstadoRelatorio::Pronto(relatorio) => {
-                render_relatorio(ui, relatorio.as_ref(), self.state.metrica_plot);
+                render_relatorio(
+                    ui,
+                    relatorio.as_ref(),
+                    self.state.metrica_plot,
+                    self.state.escala_log,
+                );
             }
         }
     }
@@ -868,7 +886,12 @@ fn aplicar_tema(ctx: &egui::Context) {
     });
 }
 
-fn render_relatorio(ui: &mut egui::Ui, relatorio: &RelatorioCanal, metrica: Option<Metrica>) {
+fn render_relatorio(
+    ui: &mut egui::Ui,
+    relatorio: &RelatorioCanal,
+    metrica: Option<Metrica>,
+    escala_log: bool,
+) {
     ui.label(RichText::new(formatar_sumario(relatorio)).size(16.0));
     ui.add_space(8.0);
 
@@ -876,7 +899,7 @@ fn render_relatorio(ui: &mut egui::Ui, relatorio: &RelatorioCanal, metrica: Opti
         .and_then(|metrica| relatorio.tendencias.iter().find(|t| t.metrica == metrica))
         .or_else(|| relatorio.tendencias.first())
     {
-        render_plot(ui, tendencia);
+        render_plot(ui, tendencia, escala_log);
         ui.add_space(8.0);
     }
 
@@ -925,6 +948,18 @@ fn render_relatorio(ui: &mut egui::Ui, relatorio: &RelatorioCanal, metrica: Opti
         }
     }
 
+    if let Some(janelas) = &relatorio.diagnostico_janelas {
+        ui.add_space(8.0);
+        ui.heading("Diagnóstico de Robustez (views/dia)");
+        for linha in application::relatorio::export::linhas_diagnostico(janelas) {
+            ui.label(format!("• {linha}"));
+        }
+        ui.colored_label(
+            COR_AVISO,
+            application::relatorio::export::nota_diagnostico(janelas),
+        );
+    }
+
     if relatorio.modo == ModoAnalise::PorPublicacao {
         ui.add_space(4.0);
         ui.label(
@@ -945,28 +980,37 @@ fn render_relatorio(ui: &mut egui::Ui, relatorio: &RelatorioCanal, metrica: Opti
     }
 }
 
-fn render_plot(ui: &mut egui::Ui, tendencia: &TendenciaMetrica) {
+fn render_plot(ui: &mut egui::Ui, tendencia: &TendenciaMetrica, escala_log: bool) {
     let n = tendencia.pontos.len();
     if n < 2 {
         return;
     }
 
+    // O egui_plot 0.29 não tem eixo logarítmico nativo: transformamos os
+    // valores para ln antes de plotar e revertemos no formatter do eixo Y.
+    let transformar = |valor: f64| {
+        if escala_log {
+            valor.max(1e-9).ln()
+        } else {
+            valor
+        }
+    };
+
     let pontos: Vec<[f64; 2]> = tendencia
         .pontos
         .iter()
         .enumerate()
-        .map(|(indice, (_, valor))| [indice as f64, *valor])
+        .map(|(indice, (_, valor))| [indice as f64, transformar(*valor)])
         .collect();
     let datas = tendencia.pontos.clone();
     let x_final = (n - 1) as f64;
-    let y_final = tendencia.intercept_theil_sen + tendencia.slope_theil_sen * x_final;
 
     let mut banda: Vec<[f64; 2]> = (0..n)
         .map(|indice| {
             let x = indice as f64;
             [
                 x,
-                tendencia.intercept_theil_sen + tendencia.slope_ic95.0 * x,
+                transformar(tendencia.intercept_theil_sen + tendencia.slope_ic95.0 * x),
             ]
         })
         .collect();
@@ -974,11 +1018,14 @@ fn render_plot(ui: &mut egui::Ui, tendencia: &TendenciaMetrica) {
         let x = indice as f64;
         [
             x,
-            tendencia.intercept_theil_sen + tendencia.slope_ic95.1 * x,
+            transformar(tendencia.intercept_theil_sen + tendencia.slope_ic95.1 * x),
         ]
     }));
 
-    Plot::new("grafico-serie")
+    let inicio = transformar(tendencia.intercept_theil_sen);
+    let fim = transformar(tendencia.intercept_theil_sen + tendencia.slope_theil_sen * x_final);
+
+    let mut plot = Plot::new("grafico-serie")
         .legend(Legend::default())
         .height(300.0)
         .x_axis_formatter(move |mark, _| {
@@ -990,30 +1037,33 @@ fn render_plot(ui: &mut egui::Ui, tendencia: &TendenciaMetrica) {
                 .get(indice as usize)
                 .map(|(data, _)| data.format("%Y-%m-%d").to_string())
                 .unwrap_or_default()
-        })
-        .show(ui, |plot_ui| {
-            plot_ui.polygon(
-                Polygon::new(banda)
-                    .name("IC95")
-                    .fill_color(Color32::from_rgba_unmultiplied(64, 120, 220, 40))
-                    .stroke(egui::Stroke::new(0.0, Color32::TRANSPARENT)),
-            );
-            plot_ui.line(
-                Line::new(pontos)
-                    .name("Série")
-                    .color(Color32::from_rgb(90, 160, 255))
-                    .width(2.0),
-            );
-            plot_ui.line(
-                Line::new(vec![
-                    [0.0, tendencia.intercept_theil_sen],
-                    [x_final, y_final],
-                ])
+        });
+    if escala_log {
+        plot = plot.y_axis_label("log").y_axis_formatter(|mark, _| {
+            application::relatorio::export::formatar_numero(mark.value.exp())
+        });
+    }
+
+    plot.show(ui, |plot_ui| {
+        plot_ui.polygon(
+            Polygon::new(banda)
+                .name("IC95")
+                .fill_color(Color32::from_rgba_unmultiplied(64, 120, 220, 40))
+                .stroke(egui::Stroke::new(0.0, Color32::TRANSPARENT)),
+        );
+        plot_ui.line(
+            Line::new(pontos)
+                .name("Série")
+                .color(Color32::from_rgb(90, 160, 255))
+                .width(2.0),
+        );
+        plot_ui.line(
+            Line::new(vec![[0.0, inicio], [x_final, fim]])
                 .name("Theil-Sen")
                 .color(COR_SUCESSO)
                 .width(2.0),
-            );
-        });
+        );
+    });
 }
 
 /// Sumário curto do relatório para a GUI.
@@ -1091,6 +1141,7 @@ mod tests {
             periodo_fim: NaiveDate::from_ymd_opt(2024, 1, 30).expect("data"),
             modo: ModoAnalise::PorColeta,
             tendencias,
+            diagnostico_janelas: None,
             comparacoes: Vec::<ComparacaoPares>::new(),
             avisos: Vec::new(),
             metadados: MetadadosReproducao {

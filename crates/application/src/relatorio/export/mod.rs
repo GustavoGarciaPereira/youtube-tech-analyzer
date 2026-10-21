@@ -3,7 +3,7 @@ use std::fmt::Write as _;
 use analysis::Direcao;
 use domain::entities::snapshot::Metrica;
 
-use super::{ComparacaoPares, ModoAnalise, RelatorioCanal, TendenciaMetrica};
+use super::{ComparacaoPares, DiagnosticoJanela, ModoAnalise, RelatorioCanal, TendenciaMetrica};
 
 /// Exporta o relatório em Markdown.
 #[must_use]
@@ -88,6 +88,17 @@ pub fn para_markdown(relatorio: &RelatorioCanal) -> String {
         }
     }
     let _ = writeln!(saida);
+
+    if let Some(janelas) = &relatorio.diagnostico_janelas {
+        let _ = writeln!(saida, "## Diagnóstico de Robustez (views/dia)");
+        let _ = writeln!(saida);
+        for linha in linhas_diagnostico(janelas) {
+            let _ = writeln!(saida, "- {linha}");
+        }
+        let _ = writeln!(saida);
+        let _ = writeln!(saida, "> {}", nota_diagnostico(janelas));
+        let _ = writeln!(saida);
+    }
 
     let _ = writeln!(saida, "## Avisos");
     let _ = writeln!(saida);
@@ -318,6 +329,86 @@ fn direcao_predominante(tendencias: &[&TendenciaMetrica]) -> &'static str {
     }
 }
 
+/// Linhas da auto-auditoria, uma por janela temporal.
+#[must_use]
+pub fn linhas_diagnostico(janelas: &[DiagnosticoJanela]) -> Vec<String> {
+    janelas
+        .iter()
+        .map(|janela| {
+            let rotulo = match janela.janela_dias {
+                None => "Janela completa".to_owned(),
+                Some(dias) => format!("Últimos {dias} dias"),
+            };
+            if janela.janela_dias.is_none() {
+                format!(
+                    "{rotulo} (N={}): slope {}",
+                    janela.n_snapshots,
+                    formatar_numero(janela.slope_views_dia)
+                )
+            } else if janela.multiplicador_slope < 0.0 {
+                format!(
+                    "{rotulo} (N={}): slope {} (sinal invertido, {:.1}x em módulo)",
+                    janela.n_snapshots,
+                    formatar_numero(janela.slope_views_dia),
+                    janela.multiplicador_slope.abs()
+                )
+            } else {
+                format!(
+                    "{rotulo} (N={}): slope {} ({:.1}x)",
+                    janela.n_snapshots,
+                    formatar_numero(janela.slope_views_dia),
+                    janela.multiplicador_slope
+                )
+            }
+        })
+        .collect()
+}
+
+/// Conclusão da auto-auditoria de views/dia.
+#[must_use]
+pub fn nota_diagnostico(janelas: &[DiagnosticoJanela]) -> String {
+    let curtas: Vec<&DiagnosticoJanela> = janelas
+        .iter()
+        .filter(|janela| janela.janela_dias.is_some())
+        .collect();
+    if curtas.is_empty() {
+        return "Janelas curtas sem pontos suficientes para comparar.".to_owned();
+    }
+
+    let base = janelas
+        .iter()
+        .find(|janela| janela.janela_dias.is_none())
+        .map_or(0.0, |janela| janela.slope_views_dia);
+    let maior = curtas
+        .iter()
+        .map(|janela| janela.multiplicador_slope.abs())
+        .fold(0.0, f64::max);
+    let invertou = curtas
+        .iter()
+        .any(|janela| janela.slope_views_dia * base < 0.0);
+    let amostra_curta = curtas.iter().any(|janela| janela.n_snapshots < 10);
+
+    let mut nota = if maior > 10.0 {
+        let inversao = if invertou {
+            ", incluindo inversão de sinal"
+        } else {
+            ""
+        };
+        format!(
+            "Alerta: o slope varia {maior:.1}x em módulo quando a janela encolhe{inversao}. Isto indica que a tendência de views/dia é sensível ao divisor de idade. Usa likes/views para conclusões de engajamento."
+        )
+    } else if maior < 5.0 {
+        "Sem evidência de artefacto de idade na janela analisada.".to_owned()
+    } else {
+        format!("Sensibilidade moderada à janela ({maior:.1}x): interpreta views/dia com cautela.")
+    };
+
+    if amostra_curta {
+        nota.push_str(" Atenção: há janelas com menos de 10 pontos; o multiplicador é instável.");
+    }
+    nota
+}
+
 /// Frase que descreve a comparação com pares (percentil relativo ou aviso).
 #[must_use]
 pub fn texto_comparacao(comparacao: &ComparacaoPares) -> String {
@@ -328,9 +419,10 @@ pub fn texto_comparacao(comparacao: &ComparacaoPares) -> String {
     } else {
         format!("do grupo '{}'", comparacao.grupo)
     };
+    let prefixo = format!("Para '{}':", comparacao.metrica.as_str());
     match comparacao.percentil_canal_entre_pares {
         Some(percentil) => format!(
-            "O slope do canal ({:.4}) está no percentil {:.1} face a {} canais {}. Normalizado pela mediana da série ({:.4}), o slope do canal é {:.4} e a mediana dos pares é {:.4}.",
+            "{prefixo} o slope do canal ({:.4}) está no percentil {:.1} face a {} canais {}. Normalizado pela mediana da série ({:.4}), o slope do canal é {:.4} e a mediana dos pares é {:.4}.",
             comparacao.slope_canal,
             percentil,
             comparacao.n_pares,
@@ -340,7 +432,7 @@ pub fn texto_comparacao(comparacao: &ComparacaoPares) -> String {
             comparacao.slope_mediano_pares_relativo
         ),
         None => format!(
-            "O slope do canal ({:.4}) não tem percentil fiável: apenas {} canais {} com série utilizável (mínimo 10). Slope relativo do canal: {:.4}; mediana relativa dos pares: {:.4}.",
+            "{prefixo} o slope do canal ({:.4}) não tem percentil fiável: apenas {} canais {} com série utilizável (mínimo 10). Slope relativo do canal: {:.4}; mediana relativa dos pares: {:.4}.",
             comparacao.slope_canal,
             comparacao.n_pares,
             grupo,

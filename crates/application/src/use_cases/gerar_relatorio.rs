@@ -11,8 +11,8 @@ use tokio::task::JoinSet;
 
 use crate::errors::ErroAplicacao;
 use crate::relatorio::{
-    ComparacaoPares, MetadadosReproducao, ModoAnalise, RelatorioCanal, RelatorioConfig,
-    TendenciaMetrica,
+    ComparacaoPares, DiagnosticoJanela, MetadadosReproducao, ModoAnalise, RelatorioCanal,
+    RelatorioConfig, TendenciaMetrica,
 };
 
 const CONCORRENCIA_LOTE: usize = 4;
@@ -292,6 +292,7 @@ async fn gerar_relatorio(
         );
     }
 
+    let diagnostico_janelas = construir_diagnostico(repositorio.as_ref(), &canal.id, &config)?;
     let comparacoes =
         construir_comparacoes(&repositorio, &canal.id, &tendencias, &config, &mut avisos)?;
 
@@ -301,6 +302,7 @@ async fn gerar_relatorio(
         periodo_fim,
         modo: config.modo,
         tendencias,
+        diagnostico_janelas,
         comparacoes,
         avisos,
         metadados,
@@ -418,6 +420,68 @@ fn carregar_por_publicacao(
     }
 
     Ok((serie, avisos))
+}
+
+/// Auto-auditoria do viés de idade: reanalisa a série de views/dia com
+/// janelas progressivamente mais curtas.
+///
+/// Só corre em PorPublicacao, com normalização ativa e quando a métrica
+/// 'visualizacoes' faz parte do relatório.
+fn construir_diagnostico(
+    repositorio: &dyn RepositorioDeCanais,
+    canal_id: &CanalId,
+    config: &RelatorioConfig,
+) -> Result<Option<Vec<DiagnosticoJanela>>, ErroAplicacao> {
+    if config.modo != ModoAnalise::PorPublicacao
+        || !config.views_por_dia
+        || !config.metricas.contains(&Metrica::Visualizacoes)
+    {
+        return Ok(None);
+    }
+
+    let mut janelas = Vec::new();
+    for janela in [None, Some(365), Some(180)] {
+        let mut config_janela = config.clone();
+        config_janela.periodo_dias = janela;
+        let (serie, _) = carregar_por_publicacao(
+            repositorio,
+            canal_id,
+            Metrica::Visualizacoes,
+            &config_janela,
+        )?;
+        if serie.len() < 3 {
+            continue;
+        }
+        let valores: Vec<f64> = serie.iter().map(|(_, valor)| *valor).collect();
+        let Ok(resultado) = theil_sen(&valores) else {
+            continue;
+        };
+        janelas.push(DiagnosticoJanela {
+            janela_dias: janela,
+            n_snapshots: serie.len(),
+            slope_views_dia: resultado.slope,
+            multiplicador_slope: 1.0,
+        });
+    }
+
+    if janelas.is_empty() {
+        return Ok(None);
+    }
+
+    // A referência é a janela completa; sem ela, os multiplicadores ficam 1.0.
+    let base = janelas
+        .iter()
+        .find(|janela| janela.janela_dias.is_none())
+        .map(|janela| janela.slope_views_dia);
+    if let Some(base) = base
+        && base.abs() > f64::MIN_POSITIVE
+    {
+        for janela in &mut janelas {
+            janela.multiplicador_slope = janela.slope_views_dia / base;
+        }
+    }
+
+    Ok(Some(janelas))
 }
 
 const fn metrica_por_publicacao(metrica: Metrica) -> bool {
@@ -580,14 +644,16 @@ fn construir_comparacoes(
             aviso_unico(
                 avisos,
                 format!(
-                    "apenas {n_pares} pares {}; comparação estatisticamente não fiável (mínimo {MIN_PARES_COMPARACAO})",
-                    grupo_legivel(&grupo)
+                    "apenas {n_pares} pares {} com série válida para '{}' (mínimo {MIN_PARES_COMPARACAO})",
+                    grupo_legivel(&grupo),
+                    tendencia.metrica.as_str()
                 ),
             );
             None
         };
 
         comparacoes.push(ComparacaoPares {
+            metrica: tendencia.metrica,
             grupo: grupo.clone(),
             n_pares,
             slope_mediano_pares,
@@ -777,6 +843,7 @@ mod tests {
             periodo_fim: NaiveDate::from_ymd_opt(2024, 1, 30).expect("data válida"),
             modo: ModoAnalise::PorColeta,
             tendencias: p_values.iter().map(|p| tendencia(*p)).collect(),
+            diagnostico_janelas: None,
             comparacoes: Vec::new(),
             avisos: Vec::new(),
             metadados: MetadadosReproducao {

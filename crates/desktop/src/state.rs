@@ -237,6 +237,8 @@ pub struct AppState {
     pub periodo_dias: Option<u32>,
     /// Eixo temporal usado no relatório.
     pub modo_analise: ModoAnalise,
+    /// Escala logarítmica no gráfico de tendência.
+    pub escala_log: bool,
     /// Métrica selecionada no gráfico.
     pub metrica_plot: Option<Metrica>,
     /// Instante da primeira alteração de preferências ainda não guardada.
@@ -264,6 +266,7 @@ impl AppState {
             .as_deref()
             .and_then(ModoAnalise::de_str)
             .unwrap_or(ModoAnalise::PorColeta);
+        let prefs_log_scale = prefs.log_scale;
 
         let mut state = Self {
             deps,
@@ -281,6 +284,7 @@ impl AppState {
             formato_export,
             periodo_dias,
             modo_analise,
+            escala_log: prefs_log_scale,
             metrica_plot: Some(Metrica::Visualizacoes),
             prefs_pendente_desde: None,
         };
@@ -369,6 +373,7 @@ impl AppState {
         self.prefs.formato_export_default = Some(self.formato_export.como_str().to_owned());
         self.prefs.periodo_dias_default = self.periodo_dias;
         self.prefs.modo_analise_default = Some(self.modo_analise.como_str().to_owned());
+        self.prefs.log_scale = self.escala_log;
         if let Err(erro) = self.prefs.guardar() {
             self.toast(format!("Erro ao guardar preferências: {erro}"));
         }
