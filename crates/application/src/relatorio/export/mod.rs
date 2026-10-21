@@ -326,12 +326,15 @@ pub fn media_sentimento(serie: &[(NaiveDate, f64, f64)]) -> Option<f64> {
 
 /// Classificação textual do score médio.
 ///
-/// A banda neutra evita chamar "positivo" a uma média residual de 0.01.
+/// O score é arredondado a duas casas antes da comparação para que a
+/// classificação corresponda exactamente ao valor impresso no ecrã e no
+/// Markdown. A banda neutra evita chamar "positivo" a uma média residual.
 #[must_use]
 pub fn classificacao_sentimento(score_medio: f64) -> &'static str {
-    if score_medio > 0.05 {
+    let arredondado = (score_medio * 100.0).round() / 100.0;
+    if arredondado > 0.05 {
         "Positivo"
-    } else if score_medio < -0.05 {
+    } else if arredondado < -0.05 {
         "Negativo"
     } else {
         "Neutro"
@@ -516,5 +519,18 @@ fn campo_csv(valor: &str) -> String {
         format!("\"{}\"", valor.replace('"', "\"\""))
     } else {
         valor.to_owned()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::classificacao_sentimento;
+
+    #[test]
+    fn classificacao_usa_o_score_arredondado() {
+        assert_eq!(classificacao_sentimento(0.05), "Neutro");
+        assert_eq!(classificacao_sentimento(-0.05), "Neutro");
+        assert_eq!(classificacao_sentimento(0.06), "Positivo");
+        assert_eq!(classificacao_sentimento(-0.06), "Negativo");
     }
 }

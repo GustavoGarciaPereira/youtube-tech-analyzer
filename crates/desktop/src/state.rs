@@ -441,9 +441,27 @@ impl AppState {
         }
     }
 
+    /// Reavalia a presença dos artefactos do modelo NLP.
+    ///
+    /// Permite que a GUI detecte um modelo descarregado pela CLI enquanto
+    /// está aberta. Só consulta metadados de ficheiros, sem carregar o `ort`.
+    pub fn refresh_nlp_modelo_pronto(&mut self) {
+        let pronto = infra_nlp::ModelManager::novo().modelo_pronto();
+        if pronto == self.nlp_modelo_pronto {
+            return;
+        }
+        self.nlp_modelo_pronto = pronto;
+        if pronto {
+            self.refresh_nlp_pendentes();
+        }
+    }
+
     /// Muda de ecrã e agenda a gravação das preferências.
     pub fn mudar_ecra(&mut self, ecra: Ecra) {
         self.ecra = ecra;
+        if ecra == Ecra::Relatorio {
+            self.refresh_nlp_modelo_pronto();
+        }
         self.marcar_prefs();
     }
 

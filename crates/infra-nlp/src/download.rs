@@ -20,6 +20,12 @@ pub const VERSAO_RUNTIME: &str = "1.22.0";
 /// Tamanho mínimo aceitável para considerar um ficheiro descarregado.
 const TAMANHO_MINIMO: u64 = 1024;
 
+/// Tamanho mínimo do modelo ONNX quantizado (~121 MB no original).
+const TAMANHO_MINIMO_MODELO: u64 = 50 * 1024 * 1024;
+
+/// Tamanho mínimo do tokenizer (~2 MB no original).
+const TAMANHO_MINIMO_TOKENIZER: u64 = 100 * 1024;
+
 /// Tamanho mínimo do runtime descomprimido (~21 MB no original).
 const TAMANHO_MINIMO_RUNTIME: u64 = 1_000_000;
 
@@ -91,8 +97,8 @@ impl ModelManager {
     /// "Analisar" sem pagar o custo de inicializar o runtime.
     #[must_use]
     pub fn modelo_pronto(&self) -> bool {
-        ficheiro_utilizavel_sync(&self.caminho_modelo(), TAMANHO_MINIMO)
-            && ficheiro_utilizavel_sync(&self.caminho_tokenizer(), TAMANHO_MINIMO)
+        ficheiro_utilizavel_sync(&self.caminho_modelo(), TAMANHO_MINIMO_MODELO)
+            && ficheiro_utilizavel_sync(&self.caminho_tokenizer(), TAMANHO_MINIMO_TOKENIZER)
             && ficheiro_utilizavel_sync(&self.caminho_runtime(), TAMANHO_MINIMO_RUNTIME)
     }
 
@@ -254,7 +260,17 @@ fn ficheiro_utilizavel_sync(caminho: &Path, tamanho_minimo: u64) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ModelManager, TAMANHO_MINIMO, TAMANHO_MINIMO_RUNTIME, extrair_runtime};
+    use super::{
+        ModelManager, TAMANHO_MINIMO_MODELO, TAMANHO_MINIMO_RUNTIME, TAMANHO_MINIMO_TOKENIZER,
+        extrair_runtime,
+    };
+
+    fn criar_com_tamanho(caminho: std::path::PathBuf, tamanho: u64) {
+        std::fs::File::create(caminho)
+            .expect("criar ficheiro")
+            .set_len(tamanho)
+            .expect("definir tamanho");
+    }
 
     #[test]
     fn modelo_pronto_exige_os_tres_artefactos() {
@@ -269,21 +285,20 @@ mod tests {
 
         assert!(!gestor.modelo_pronto(), "pasta vazia não está pronta");
 
-        std::fs::write(gestor.caminho_modelo(), vec![0_u8; TAMANHO_MINIMO as usize])
-            .expect("modelo");
-        std::fs::write(
-            gestor.caminho_tokenizer(),
-            vec![0_u8; TAMANHO_MINIMO as usize],
-        )
-        .expect("tokenizer");
-        assert!(!gestor.modelo_pronto(), "runtime em falta");
+        // Um ficheiro de 1 KB não é um modelo ONNX plausível.
+        criar_com_tamanho(gestor.caminho_modelo(), 1024);
+        criar_com_tamanho(gestor.caminho_tokenizer(), TAMANHO_MINIMO_TOKENIZER);
+        criar_com_tamanho(gestor.caminho_runtime(), TAMANHO_MINIMO_RUNTIME);
+        assert!(
+            !gestor.modelo_pronto(),
+            "modelo abaixo de 50 MB não está pronto"
+        );
 
-        std::fs::write(
-            gestor.caminho_runtime(),
-            vec![0_u8; TAMANHO_MINIMO_RUNTIME as usize],
-        )
-        .expect("runtime");
-        assert!(gestor.modelo_pronto(), "todos os artefactos presentes");
+        criar_com_tamanho(gestor.caminho_modelo(), TAMANHO_MINIMO_MODELO);
+        assert!(
+            gestor.modelo_pronto(),
+            "todos os artefactos presentes e com tamanho suficiente"
+        );
 
         std::fs::remove_file(gestor.caminho_tokenizer()).expect("remover tokenizer");
         assert!(!gestor.modelo_pronto(), "tokenizer em falta");

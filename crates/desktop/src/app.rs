@@ -146,6 +146,8 @@ impl DesktopApp {
     }
 
     fn poll_relatorio(&mut self, ctx: &egui::Context) {
+        // Detecta um modelo descarregado pela CLI sem reiniciar a GUI.
+        self.state.refresh_nlp_modelo_pronto();
         let estado = std::mem::replace(&mut self.state.relatorio, EstadoRelatorio::Ocioso);
         match estado {
             EstadoRelatorio::EmGeracao { mut rx } => match rx.try_recv() {
@@ -1212,6 +1214,22 @@ fn render_nlp_bloco(ui: &mut egui::Ui, relatorio: &RelatorioCanal, nlp: &NlpUi) 
     pedido
 }
 
+/// Rótulo do eixo X para uma marca inteira da série.
+///
+/// O `egui_plot` também gera marcas fraccionárias em séries curtas; sem esta
+/// verificação, `0.5` arredondaria para o mesmo índice que `0.0` ou `1.0` e
+/// duplicaria os rótulos.
+fn rotulo_eixo_x(datas: &[NaiveDate], valor: f64, formato: &str) -> String {
+    let indice = valor.round();
+    if (valor - indice).abs() > 1e-6 || indice < 0.0 {
+        return String::new();
+    }
+    datas
+        .get(indice as usize)
+        .map(|data| data.format(formato).to_string())
+        .unwrap_or_default()
+}
+
 fn render_plot_sentimento(ui: &mut egui::Ui, serie: &[(NaiveDate, f64, f64)]) {
     ui.label(RichText::new("Evolução do Sentimento da Comunidade (Mensal)").strong());
     if let Some(media) = media_sentimento(serie) {
@@ -1253,16 +1271,7 @@ fn render_plot_sentimento(ui: &mut egui::Ui, serie: &[(NaiveDate, f64, f64)]) {
         .height(260.0)
         .include_y(-1.0)
         .include_y(1.0)
-        .x_axis_formatter(move |mark, _| {
-            let indice = mark.value.round();
-            if indice < 0.0 {
-                return String::new();
-            }
-            datas
-                .get(indice as usize)
-                .map(|data| data.format("%Y-%m").to_string())
-                .unwrap_or_default()
-        });
+        .x_axis_formatter(move |mark, _| rotulo_eixo_x(&datas, mark.value, "%Y-%m"));
 
     plot.show(ui, |plot_ui| {
         if n >= 2 {
@@ -1329,7 +1338,7 @@ fn render_plot(ui: &mut egui::Ui, tendencia: &TendenciaMetrica, escala_log: bool
             Some([indice as f64, transformar(*valor)])
         })
         .collect();
-    let datas = tendencia.pontos.clone();
+    let datas: Vec<NaiveDate> = tendencia.pontos.iter().map(|(data, _)| *data).collect();
     let x_final = (n - 1) as f64;
 
     let mut banda: Vec<[f64; 2]> = (0..n)
@@ -1355,16 +1364,7 @@ fn render_plot(ui: &mut egui::Ui, tendencia: &TendenciaMetrica, escala_log: bool
     let mut plot = Plot::new("grafico-serie")
         .legend(Legend::default())
         .height(300.0)
-        .x_axis_formatter(move |mark, _| {
-            let indice = mark.value.round();
-            if indice < 0.0 {
-                return String::new();
-            }
-            datas
-                .get(indice as usize)
-                .map(|(data, _)| data.format("%Y-%m-%d").to_string())
-                .unwrap_or_default()
-        });
+        .x_axis_formatter(move |mark, _| rotulo_eixo_x(&datas, mark.value, "%Y-%m-%d"));
     if escala_log {
         plot = plot.y_axis_label("log").y_axis_formatter(|mark, _| {
             application::relatorio::export::formatar_numero(mark.value.exp())
@@ -1441,7 +1441,7 @@ fn direcao_str(direcao: Direcao) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{cor_direcao, formatar_sumario};
+    use super::{cor_direcao, formatar_sumario, rotulo_eixo_x};
     use analysis::Direcao;
     use application::{
         ComparacaoPares, MetadadosReproducao, ModoAnalise, RelatorioCanal, TendenciaMetrica,
@@ -1497,5 +1497,21 @@ mod tests {
         assert_eq!(cor_direcao(Direcao::Crescente, false), Color32::GRAY);
         assert_eq!(cor_direcao(Direcao::Crescente, true), super::COR_SUCESSO);
         assert_eq!(cor_direcao(Direcao::Decrescente, true), super::COR_ERRO);
+    }
+
+    #[test]
+    fn formatter_do_eixo_x_nao_duplica_rotulos_em_series_curtas() {
+        let datas = [
+            NaiveDate::from_ymd_opt(2024, 1, 1).expect("data"),
+            NaiveDate::from_ymd_opt(2024, 2, 1).expect("data"),
+        ];
+
+        assert_eq!(rotulo_eixo_x(&datas, 0.0, "%Y-%m"), "2024-01");
+        assert_eq!(rotulo_eixo_x(&datas, 1.0, "%Y-%m"), "2024-02");
+        // Marcas fraccionárias não devem arredondar para um índice vizinho.
+        assert_eq!(rotulo_eixo_x(&datas, 0.5, "%Y-%m"), "");
+        assert_eq!(rotulo_eixo_x(&datas, 1.5, "%Y-%m"), "");
+        // Fora da série também não há rótulo.
+        assert_eq!(rotulo_eixo_x(&datas, 2.0, "%Y-%m"), "");
     }
 }
