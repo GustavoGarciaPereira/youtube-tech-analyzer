@@ -1,0 +1,23 @@
+[package]
+name = "infra-nlp"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+domain = { path = "../domain" }
+ort = { version = "=2.0.0-rc.10", default-features = false, features = ["load-dynamic"] }
+tokenizers = "0.23"
+reqwest = { workspace = true, features = ["stream"] }
+tokio = { workspace = true, features = ["fs", "io-util"] }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+dirs = "7"
+futures-util = "0.3"
+flate2 = "1"
+tar = "0.4"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+wiremock = { workspace = true }
+tempfile = { workspace = true }

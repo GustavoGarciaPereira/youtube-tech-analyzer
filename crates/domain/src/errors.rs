@@ -31,4 +31,8 @@ pub enum ErroDominio {
     /// A classificação de nicho falhou.
     #[error("falha na classificação de nicho: {0}")]
     Classificacao(String),
+
+    /// A análise de sentimento falhou.
+    #[error("falha na análise de sentimento: {0}")]
+    Sentimento(String),
 }

@@ -58,6 +58,11 @@ enum Comando {
         #[arg(long)]
         sem_normalizacao: bool,
     },
+    /// Prepara modelos locais de NLP.
+    Modelos {
+        #[command(subcommand)]
+        comando: ModelosComando,
+    },
     /// Informações sobre a base de dados.
     Db {
         #[command(subcommand)]
@@ -109,6 +114,12 @@ enum CanaisComando {
         #[arg(long)]
         recoletar_comentarios: bool,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum ModelosComando {
+    /// Descarrega o modelo de sentimento (~128 MB) para a pasta de dados.
+    BaixarSentimento,
 }
 
 #[derive(Debug, Subcommand)]
@@ -173,6 +184,17 @@ async fn main() -> anyhow::Result<()> {
         Comando::Db {
             comando: DbComando::Caminho,
         } => println!("{}", caminho.display()),
+        Comando::Modelos {
+            comando: ModelosComando::BaixarSentimento,
+        } => {
+            let gestor = infra_nlp::ModelManager::novo();
+            eprintln!(
+                "A garantir modelo de sentimento (~150 MB) em {}",
+                gestor.base().display()
+            );
+            let pasta = gestor.garantir_modelo_baixado().await?;
+            println!("{}", pasta.display());
+        }
         Comando::Canal { comando } => executar_canal(comando, &caminho).await?,
         Comando::Canais { comando } => executar_canais(comando, &caminho).await?,
         Comando::Relatorio {

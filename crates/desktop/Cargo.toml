@@ -22,6 +22,7 @@ dotenvy.workspace = true
 domain = { path = "../domain" }
 eframe.workspace = true
 egui_plot.workspace = true
+infra-nlp = { path = "../infra-nlp" }
 infra-storage = { path = "../infra-storage" }
 infra-youtube = { path = "../infra-youtube" }
 serde.workspace = true

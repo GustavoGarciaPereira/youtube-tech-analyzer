@@ -6,3 +6,10 @@
 *.sqlite
 *.sqlite3
 .env
+
+# Cargo home local (sandbox)
+.cargo-home/
+.ci-target/
+dist/
+.ort/
+.cache/
