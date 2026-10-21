@@ -1072,19 +1072,19 @@ fn render_plot(ui: &mut egui::Ui, tendencia: &TendenciaMetrica, escala_log: bool
             Polygon::new(banda)
                 .name("IC95")
                 .fill_color(Color32::from_rgba_unmultiplied(64, 120, 220, 40))
-                .stroke(egui::Stroke::new(0.0, Color32::TRANSPARENT)),
+                .stroke(egui::Stroke::new(0.0_f32, Color32::TRANSPARENT)),
         );
         plot_ui.line(
             Line::new(pontos)
                 .name("Série")
                 .color(Color32::from_rgb(90, 160, 255))
-                .width(2.0),
+                .width(2.0_f32),
         );
         plot_ui.line(
             Line::new(vec![[0.0, inicio], [x_final, fim]])
                 .name("Theil-Sen")
                 .color(COR_SUCESSO)
-                .width(2.0),
+                .width(2.0_f32),
         );
     });
 }
