@@ -1,16 +1,17 @@
 #![forbid(unsafe_code)]
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use anyhow::{Context, anyhow};
 use application::relatorio::export::{para_csv, para_json, para_markdown};
 use application::{
-    ColetaConfig, ColetarCanalUseCase, EventoProgresso, GerarRelatorioUseCase, MetadadosReproducao,
-    ModoAnalise, RelatorioConfig,
+    AnalisarConfig, AnalisarSentimentosUseCase, ColetaConfig, ColetarCanalUseCase, EventoProgresso,
+    GerarRelatorioUseCase, MetadadosReproducao, ModoAnalise, RelatorioConfig,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 use desktop::wiring;
-use domain::ports::RepositorioDeCanais;
+use domain::ports::{AnalisadorDeSentimento, RepositorioDeCanais};
 use domain::{CanalId, CanalRef, CategoriaManual};
 use infra_youtube::{MAX_DEPTH_PADRAO, parse_canal_ref};
 use tokio::sync::mpsc;
@@ -57,6 +58,14 @@ enum Comando {
         /// Não normaliza por idade no modo por-publicacao (usa valores brutos).
         #[arg(long)]
         sem_normalizacao: bool,
+    },
+    /// Analisa o sentimento dos comentários de um canal.
+    Sentimentos {
+        /// ID, @handle ou URL.
+        referencia: String,
+        /// Inferências em paralelo (default: núcleos - 1).
+        #[arg(long)]
+        concorrencia: Option<usize>,
     },
     /// Prepara modelos locais de NLP.
     Modelos {
@@ -184,6 +193,35 @@ async fn main() -> anyhow::Result<()> {
         Comando::Db {
             comando: DbComando::Caminho,
         } => println!("{}", caminho.display()),
+        Comando::Sentimentos {
+            referencia,
+            concorrencia,
+        } => {
+            let repositorio = wiring::abrir_repositorio(&caminho)?;
+            let canal_id = resolver_canal_local(repositorio.as_ref(), &referencia)?;
+            let gestor = infra_nlp::ModelManager::novo();
+            eprintln!(
+                "A garantir modelo de sentimento (~150 MB) em {}",
+                gestor.base().display()
+            );
+            let pasta = gestor.garantir_modelo_baixado().await?;
+            let analisador: Arc<dyn AnalisadorDeSentimento> =
+                Arc::new(infra_nlp::RobertaAnalisador::new(&pasta)?);
+
+            let mut config = AnalisarConfig::default();
+            if let Some(valor) = concorrencia {
+                config.concorrencia = valor;
+            }
+
+            let caso = AnalisarSentimentosUseCase::new(analisador, repositorio, config);
+            let relatorio = caso.executar(&canal_id).await?;
+            println!(
+                "Concluído: {} analisados, {} falhas em {:.1}s",
+                relatorio.analisados,
+                relatorio.falhados,
+                relatorio.duracao.as_secs_f64()
+            );
+        }
         Comando::Modelos {
             comando: ModelosComando::BaixarSentimento,
         } => {

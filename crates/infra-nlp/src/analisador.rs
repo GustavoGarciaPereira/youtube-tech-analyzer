@@ -1,5 +1,5 @@
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use domain::ports::{AnalisadorDeSentimento, BoxFuture};
 use domain::{ErroDominio, ScoreSentimento, Sentimento};
@@ -19,17 +19,24 @@ const VERSAO_MODELO: &str = "roberta-sentiment-int8-v1";
 /// A ordem das classes no modelo é [negativo, neutro, positivo]; o score
 /// devolvido é P(positivo) - P(negativo), pelo que fica em [-1, 1].
 pub struct RobertaAnalisador {
+    motor: Arc<MotorInferencia>,
+}
+
+/// Estado partilhável entre tarefas de blocking.
+///
+/// O ONNX Runtime é síncrono e a sessão exige &mut self; a inferência corre
+/// em spawn_blocking e a sessão é protegida por Mutex.
+struct MotorInferencia {
     tokenizer: Tokenizer,
-    // Session::run exige &mut self; a porta expõe &self e a trait é Sync.
     sessao: Mutex<Session>,
     nome_saida: String,
 }
 
 impl RobertaAnalisador {
-    /// Carrega o tokenizer e o modelo ONNX de uma pasta.
+    /// Carrega o tokenizer, o runtime e o modelo ONNX de uma pasta.
     ///
-    /// A pasta deve conter model.onnx e tokenizer.json, como os deixados por
-    /// ModelManager::garantir_modelo_baixado.
+    /// A pasta deve conter model.onnx, tokenizer.json e libonnxruntime.so,
+    /// como os deixados por ModelManager::garantir_modelo_baixado.
     pub fn new(pasta_modelos: &Path) -> Result<Self, ErroNlp> {
         let caminho_modelo = pasta_modelos.join("model.onnx");
         let caminho_tokenizer = pasta_modelos.join("tokenizer.json");
@@ -70,12 +77,16 @@ impl RobertaAnalisador {
             .ok_or_else(|| ErroNlp::ContratoModelo("modelo sem saídas".to_owned()))?;
 
         Ok(Self {
-            tokenizer,
-            sessao: Mutex::new(sessao),
-            nome_saida,
+            motor: Arc::new(MotorInferencia {
+                tokenizer,
+                sessao: Mutex::new(sessao),
+                nome_saida,
+            }),
         })
     }
+}
 
+impl MotorInferencia {
     fn inferir(&self, texto: &str) -> Result<ScoreSentimento, ErroNlp> {
         let (ids, mascara) = preparar_entradas(&self.tokenizer, texto)?;
         let comprimento = ids.len();
@@ -135,8 +146,19 @@ impl AnalisadorDeSentimento for RobertaAnalisador {
         &'a self,
         texto: &'a str,
     ) -> BoxFuture<'a, Result<ScoreSentimento, ErroDominio>> {
-        let resultado = self.inferir(texto).map_err(ErroDominio::from);
-        Box::pin(std::future::ready(resultado))
+        let motor = Arc::clone(&self.motor);
+        let texto = texto.to_owned();
+
+        Box::pin(async move {
+            // A inferência é síncrona (C++); sem spawn_blocking prendia uma
+            // worker thread do Tokio durante todo o lote.
+            let resultado = tokio::task::spawn_blocking(move || motor.inferir(&texto))
+                .await
+                .map_err(|erro| {
+                    ErroDominio::Sentimento(format!("tarefa de inferência falhou: {erro}"))
+                })?;
+            resultado.map_err(ErroDominio::from)
+        })
     }
 
     fn versao_modelo(&self) -> &str {

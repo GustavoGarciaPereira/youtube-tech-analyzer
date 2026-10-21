@@ -18,4 +18,7 @@ pub use relatorio::{
     ComparacaoPares, MetadadosReproducao, ModoAnalise, RelatorioCanal, RelatorioConfig,
     TendenciaMetrica,
 };
-pub use use_cases::{ColetarCanalUseCase, GerarRelatorioUseCase};
+pub use use_cases::{
+    AnalisarConfig, AnalisarSentimentosUseCase, ColetarCanalUseCase, GerarRelatorioUseCase,
+    RelatorioSentimentos,
+};

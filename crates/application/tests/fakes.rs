@@ -9,7 +9,6 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use chrono::Utc;
-use domain::CanalRef;
 use domain::entities::{
     canal::Canal,
     comentario::Comentario,
@@ -19,8 +18,9 @@ use domain::entities::{
 };
 use domain::errors::ErroDominio;
 use domain::ids::{CanalId, ComentarioId, VideoId};
-use domain::ports::{ColetorDeCanal, RepositorioDeCanais};
-use domain::value_objects::{CategoriaManual, ScoreSentimento};
+use domain::ports::{AnalisadorDeSentimento, ColetorDeCanal, RepositorioDeCanais};
+use domain::value_objects::{CategoriaManual, ScoreSentimento, Sentimento};
+use domain::{BoxFuture, CanalRef};
 
 /// Coletor configurável para testes, sem rede.
 pub struct FakeColetor {
@@ -128,6 +128,101 @@ impl ColetorDeCanal for FakeColetor {
 
             Ok(self.comentarios.get(&video_id).cloned().unwrap_or_default())
         })
+    }
+}
+
+/// Analisador de sentimento configurável, sem ONNX.
+pub struct FakeAnalisador {
+    versao: String,
+    atraso: Duration,
+    falhar_texto: Option<String>,
+    chamadas: AtomicUsize,
+    ativos: AtomicUsize,
+    max_ativos: AtomicUsize,
+}
+
+impl FakeAnalisador {
+    /// Cria um analisador que devolve sempre Positivo.
+    #[must_use]
+    pub fn novo() -> Self {
+        Self {
+            versao: "fake-v1".to_owned(),
+            atraso: Duration::ZERO,
+            falhar_texto: None,
+            chamadas: AtomicUsize::new(0),
+            ativos: AtomicUsize::new(0),
+            max_ativos: AtomicUsize::new(0),
+        }
+    }
+
+    /// Define a versão do modelo devolvida pela porta.
+    #[must_use]
+    pub fn com_versao(mut self, versao: &str) -> Self {
+        self.versao = versao.to_owned();
+        self
+    }
+
+    /// Adiciona latência a cada inferência.
+    #[must_use]
+    pub fn com_atraso(mut self, atraso: Duration) -> Self {
+        self.atraso = atraso;
+        self
+    }
+
+    /// Faz a análise falhar para um texto específico.
+    #[must_use]
+    pub fn com_falha_para(mut self, texto: &str) -> Self {
+        self.falhar_texto = Some(texto.to_owned());
+        self
+    }
+
+    /// Número total de chamadas a analisar.
+    #[must_use]
+    pub fn chamadas(&self) -> usize {
+        self.chamadas.load(Ordering::SeqCst)
+    }
+
+    /// Pico de análises concorrentes.
+    #[must_use]
+    pub fn max_ativos(&self) -> usize {
+        self.max_ativos.load(Ordering::SeqCst)
+    }
+}
+
+impl Default for FakeAnalisador {
+    fn default() -> Self {
+        Self::novo()
+    }
+}
+
+impl AnalisadorDeSentimento for FakeAnalisador {
+    fn analisar<'a>(
+        &'a self,
+        texto: &'a str,
+    ) -> BoxFuture<'a, Result<ScoreSentimento, ErroDominio>> {
+        let deve_falhar = self.falhar_texto.as_deref() == Some(texto);
+        let atraso = self.atraso;
+        self.chamadas.fetch_add(1, Ordering::SeqCst);
+        let ativos = self.ativos.fetch_add(1, Ordering::SeqCst) + 1;
+        self.max_ativos.fetch_max(ativos, Ordering::SeqCst);
+
+        Box::pin(async move {
+            if !atraso.is_zero() {
+                tokio::time::sleep(atraso).await;
+            }
+            self.ativos.fetch_sub(1, Ordering::SeqCst);
+            if deve_falhar {
+                Err(ErroDominio::Sentimento(format!(
+                    "falha simulada para o texto: {texto}"
+                )))
+            } else {
+                Ok(ScoreSentimento::novo(Sentimento::Positivo, 0.9))
+            }
+        })
+    }
+
+    fn versao_modelo(&self) -> &str {
+        &self.versao
     }
 }
 
