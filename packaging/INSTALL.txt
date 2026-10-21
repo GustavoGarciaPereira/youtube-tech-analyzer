@@ -1,0 +1,23 @@
+YouTube Tech Analyzer - binarios Linux x86_64
+(glibc >= 2.35, ou seja Ubuntu 22.04 ou mais recente)
+
+Conteudo:
+  yta          CLI: relatorios, coleta, categorizacao
+  yta-desktop  GUI (egui/eframe)
+
+Requisitos:
+  - glibc >= 2.35
+  - GUI: libxkbcommon, libwayland-client, libX11 e libGL.
+    Debian/Ubuntu:
+      sudo apt install libxkbcommon0 libwayland-client0 libx11-6 libgl1
+
+Uso rapido:
+  ./yta --help
+  ./yta relatorio <ID|@handle|URL> --formato md
+  ./yta-desktop
+
+Base de dados:
+  \$XDG_DATA_HOME/yta/yta.db ou ~/.local/share/yta/yta.db
+  A variavel YTA_DB_PATH permite escolher outro caminho.
+
+A coleta precisa de YOUTUBE_API_KEY. Ver o README para a configuracao.

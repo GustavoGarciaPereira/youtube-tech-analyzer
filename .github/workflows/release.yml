@@ -1,0 +1,68 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux-x86_64:
+    name: Linux x86_64
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Instalar dependências de sistema
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libxkbcommon-dev \
+            libxkbcommon-x11-dev \
+            libwayland-dev \
+            libx11-dev \
+            libxi-dev \
+            libxcursor-dev \
+            libxrandr-dev \
+            libgl1-mesa-dev \
+            libegl1-mesa-dev
+
+      - name: Instalar Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build
+        run: cargo build --release --locked --workspace
+
+      - name: Empacotar
+        run: |
+          set -euo pipefail
+          tag="${GITHUB_REF_NAME}"
+          pasta="yta-${tag}-x86_64-unknown-linux-gnu"
+          mkdir -p "dist/${pasta}"
+          cp target/release/yta "dist/${pasta}/yta"
+          cp target/release/desktop "dist/${pasta}/yta-desktop"
+          strip "dist/${pasta}/yta" "dist/${pasta}/yta-desktop"
+          cp README.md LICENSE .env.example "dist/${pasta}/"
+          cp packaging/INSTALL.txt "dist/${pasta}/INSTALL.txt"
+          cp -r docs "dist/${pasta}/docs"
+          tar -C dist -czf "dist/${pasta}.tar.gz" "${pasta}"
+          ( cd dist && sha256sum "${pasta}.tar.gz" > "${pasta}.tar.gz.sha256" )
+          ls -lh dist
+
+      - name: Publicar release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
