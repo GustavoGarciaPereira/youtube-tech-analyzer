@@ -399,6 +399,77 @@ fn sentimento_e_idempotente_por_versao_de_modelo() -> Resultado {
 }
 
 #[test]
+fn serie_sentimento_agrupa_por_mes_de_publicacao() -> Resultado {
+    let repo = repositorio()?;
+    let canal_principal = canal("canal-1");
+    let outro = canal("canal-2");
+    repo.guardar_canal(&canal_principal)?;
+    repo.guardar_canal(&outro)?;
+
+    // Dois vídeos em janeiro, um em fevereiro e um noutro canal.
+    repo.guardar_video(&video("v1", "canal-1", "2024-01-15T00:00:00Z"))?;
+    repo.guardar_video(&video("v2", "canal-1", "2024-01-28T00:00:00Z"))?;
+    repo.guardar_video(&video("v3", "canal-1", "2024-02-10T00:00:00Z"))?;
+    repo.guardar_video(&video("v4", "canal-2", "2024-01-20T00:00:00Z"))?;
+    for (id, video_id) in [("c1", "v1"), ("c2", "v2"), ("c3", "v3"), ("c4", "v4")] {
+        repo.guardar_comentario(&comentario(id, video_id))?;
+    }
+
+    assert_eq!(
+        repo.contar_comentarios_sem_sentimento(&canal_principal.id, "modelo-v1")?,
+        3
+    );
+    assert_eq!(
+        repo.contar_comentarios_sem_sentimento(&canal_principal.id, "modelo-v2")?,
+        3
+    );
+
+    let scores = [
+        ("c1", Sentimento::Positivo, 0.9),
+        ("c2", Sentimento::Positivo, 0.5),
+        ("c3", Sentimento::Negativo, -0.4),
+        ("c4", Sentimento::Positivo, 0.2), // outro canal: não entra na série
+    ];
+    for (id, sentimento, score) in scores {
+        repo.guardar_sentimento(
+            &ComentarioId::new(id),
+            &ScoreSentimento::novo(sentimento, score),
+            "modelo-v1",
+        )?;
+    }
+
+    let serie = repo.obter_serie_sentimento(&canal_principal.id, "modelo-v1")?;
+    assert_eq!(serie.len(), 2);
+    assert_eq!(
+        serie[0].0,
+        chrono::NaiveDate::from_ymd_opt(2024, 1, 1).expect("data válida")
+    );
+    assert!((serie[0].1 - (0.9 + 0.5) / 2.0).abs() < 1e-12);
+    assert!((serie[0].2 - 2.0).abs() < 1e-12);
+    assert_eq!(
+        serie[1].0,
+        chrono::NaiveDate::from_ymd_opt(2024, 2, 1).expect("data válida")
+    );
+    assert!((serie[1].1 - (-0.4)).abs() < 1e-12);
+    assert!((serie[1].2 - 1.0).abs() < 1e-12);
+
+    // Só o comentário c4 (outro canal) ficou sem análise para esta versão.
+    assert_eq!(
+        repo.contar_comentarios_sem_sentimento(&canal_principal.id, "modelo-v1")?,
+        0
+    );
+    assert_eq!(
+        repo.contar_comentarios_sem_sentimento(&canal_principal.id, "modelo-v2")?,
+        3
+    );
+    assert!(
+        repo.obter_serie_sentimento(&canal_principal.id, "modelo-v2")?
+            .is_empty()
+    );
+    Ok(())
+}
+
+#[test]
 fn sentimento_rejeita_score_fora_do_intervalo() -> Resultado {
     let repo = repositorio()?;
     let canal = canal("canal-1");

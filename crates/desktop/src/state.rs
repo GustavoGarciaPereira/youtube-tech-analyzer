@@ -2,7 +2,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use application::{EventoProgresso, ModoAnalise, RelatorioCanal, RelatorioColeta};
-use domain::{CanalId, CategoriaManual, Metrica};
+use domain::{CanalId, CategoriaManual, Metrica, VERSAO_MODELO_SENTIMENTO};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
@@ -205,6 +205,61 @@ pub enum EstadoRelatorio {
     Erro(String),
 }
 
+/// Resultado de uma tarefa de NLP (download ou análise).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EventoNlp {
+    /// O modelo e o runtime estão no disco.
+    ModeloPronto,
+    /// A análise terminou.
+    AnaliseConcluida {
+        /// Comentários analisados e persistidos.
+        analisados: usize,
+        /// Comentários que falharam.
+        falhados: usize,
+        /// Duração total em milissegundos.
+        duracao_ms: u64,
+    },
+}
+
+/// Ação disponível no bloco de NLP do relatório.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AcaoNlp {
+    /// Descarregar o modelo (~143 MB).
+    BaixarModelo,
+    /// Analisar os comentários pendentes.
+    Analisar {
+        /// Número de comentários ainda sem sentimento.
+        pendentes: usize,
+    },
+}
+
+impl AcaoNlp {
+    /// Rótulo do botão correspondente.
+    #[must_use]
+    pub fn rotulo(self) -> String {
+        match self {
+            Self::BaixarModelo => "Baixar Modelo NLP (~143 MB)".to_owned(),
+            Self::Analisar { pendentes } => {
+                format!("Analisar Sentimentos ({pendentes} pendentes)")
+            }
+        }
+    }
+}
+
+/// Decide o botão do bloco de NLP a partir do estado atual.
+///
+/// É uma função pura para poder ser testada sem uma GUI nem disco.
+#[must_use]
+pub fn acao_nlp(modelo_pronto: bool, em_progresso: bool, pendentes: usize) -> Option<AcaoNlp> {
+    if em_progresso {
+        return None;
+    }
+    if !modelo_pronto {
+        return Some(AcaoNlp::BaixarModelo);
+    }
+    (pendentes > 0).then_some(AcaoNlp::Analisar { pendentes })
+}
+
 /// Estado completo da aplicação.
 pub struct AppState {
     /// Dependências de infraestrutura.
@@ -225,6 +280,16 @@ pub struct AppState {
     pub coleta: EstadoColeta,
     /// Relatório.
     pub relatorio: EstadoRelatorio,
+    /// `true` quando os ficheiros do modelo NLP existem no disco.
+    pub nlp_modelo_pronto: bool,
+    /// `true` enquanto o download ou a análise correm.
+    pub nlp_em_progresso: bool,
+    /// Mensagem de progresso do bloco de NLP.
+    pub nlp_progresso_msg: Option<String>,
+    /// Comentários do canal selecionado ainda sem sentimento.
+    pub nlp_pendentes: usize,
+    /// Receção do resultado da tarefa de NLP em curso.
+    pub nlp_rx: Option<mpsc::Receiver<Result<EventoNlp, String>>>,
     /// Input do novo canal.
     pub formulario_novo_canal: String,
     /// Toast e instante de criação.
@@ -267,6 +332,8 @@ impl AppState {
             .and_then(ModoAnalise::de_str)
             .unwrap_or(ModoAnalise::PorColeta);
         let prefs_log_scale = prefs.log_scale;
+        // Verificação leve: só metadados de ficheiros, sem carregar o ort.
+        let nlp_modelo_pronto = infra_nlp::ModelManager::novo().modelo_pronto();
 
         let mut state = Self {
             deps,
@@ -278,6 +345,11 @@ impl AppState {
             prefs,
             coleta: EstadoColeta::Ocioso,
             relatorio: EstadoRelatorio::Ocioso,
+            nlp_modelo_pronto,
+            nlp_em_progresso: false,
+            nlp_progresso_msg: None,
+            nlp_pendentes: 0,
+            nlp_rx: None,
             formulario_novo_canal: String::new(),
             mensagem_toast: None,
             add_rx: None,
@@ -300,6 +372,9 @@ impl AppState {
         }
         if state.ecra == Ecra::Relatorio && state.canal_selecionado.is_none() {
             state.ecra = Ecra::Canais;
+        }
+        if state.canal_selecionado.is_some() {
+            state.refresh_nlp_pendentes();
         }
 
         state
@@ -335,6 +410,7 @@ impl AppState {
             .is_some_and(|id| !self.canais.iter().any(|canal| &canal.id == id))
         {
             self.canal_selecionado = None;
+            self.nlp_pendentes = 0;
         }
         Ok(())
     }
@@ -342,7 +418,27 @@ impl AppState {
     /// Seleciona um canal e agenda a gravação das preferências.
     pub fn selecionar_canal(&mut self, id: CanalId) {
         self.canal_selecionado = Some(id);
+        self.refresh_nlp_pendentes();
         self.marcar_prefs();
+    }
+
+    /// Recarrega a contagem de comentários pendentes de sentimento.
+    pub fn refresh_nlp_pendentes(&mut self) {
+        let Some(canal_id) = self.canal_selecionado.clone() else {
+            self.nlp_pendentes = 0;
+            return;
+        };
+        match self
+            .deps
+            .repositorio
+            .contar_comentarios_sem_sentimento(&canal_id, VERSAO_MODELO_SENTIMENTO)
+        {
+            Ok(total) => self.nlp_pendentes = total,
+            Err(erro) => {
+                self.nlp_pendentes = 0;
+                self.toast(format!("Erro ao contar comentários pendentes: {erro}"));
+            }
+        }
     }
 
     /// Muda de ecrã e agenda a gravação das preferências.
@@ -395,7 +491,7 @@ impl AppState {
 
 #[cfg(test)]
 mod tests {
-    use super::{Ecra, FormatoExport, ProgressoColeta};
+    use super::{AcaoNlp, Ecra, FormatoExport, ProgressoColeta, acao_nlp};
     use application::EventoProgresso;
     use domain::ids::VideoId;
 
@@ -438,5 +534,30 @@ mod tests {
         for ecra in [Ecra::Canais, Ecra::Relatorio, Ecra::Definicoes] {
             assert_eq!(Ecra::de_str(ecra.como_str()), Some(ecra));
         }
+    }
+
+    #[test]
+    fn botao_nlp_alterna_entre_baixar_e_analisar() {
+        // Sem os ficheiros do modelo, a única ação é descarregar.
+        assert_eq!(acao_nlp(false, false, 120), Some(AcaoNlp::BaixarModelo));
+        assert_eq!(
+            AcaoNlp::BaixarModelo.rotulo(),
+            "Baixar Modelo NLP (~143 MB)"
+        );
+
+        // Com o modelo pronto e comentários pendentes, o botão passa a analisar.
+        assert_eq!(
+            acao_nlp(true, false, 120),
+            Some(AcaoNlp::Analisar { pendentes: 120 })
+        );
+        assert_eq!(
+            AcaoNlp::Analisar { pendentes: 120 }.rotulo(),
+            "Analisar Sentimentos (120 pendentes)"
+        );
+
+        // Sem pendentes não há ação; durante uma tarefa também não.
+        assert_eq!(acao_nlp(true, false, 0), None);
+        assert_eq!(acao_nlp(false, true, 120), None);
+        assert_eq!(acao_nlp(true, true, 120), None);
     }
 }

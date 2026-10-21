@@ -10,11 +10,14 @@ use application::{
 };
 use chrono::{Days, NaiveDate, Utc};
 use domain::CategoriaManual;
+use domain::VERSAO_MODELO_SENTIMENTO;
 use domain::entities::canal::Canal;
+use domain::entities::comentario::Comentario;
 use domain::entities::snapshot::{EntidadeTipo, Metrica, Snapshot};
 use domain::entities::video::Video;
-use domain::ids::{CanalId, VideoId};
+use domain::ids::{CanalId, ComentarioId, VideoId};
 use domain::ports::RepositorioDeCanais;
+use domain::value_objects::{ScoreSentimento, Sentimento};
 use fakes::FakeRepositorio;
 
 fn canal(id: &str, nome: &str) -> Canal {
@@ -588,6 +591,95 @@ async fn markdown_contem_metadados_de_reproducao() {
     assert!(markdown.contains("cargo test --relatorio"));
     assert!(markdown.contains("## Tendência por Métrica"));
     assert!(markdown.contains("## Limitações"));
+}
+
+#[tokio::test]
+async fn relatorio_inclui_serie_mensal_de_sentimento() {
+    let repo = Arc::new(FakeRepositorio::new());
+    repo.guardar_canal(&canal("canal-1", "Canal"))
+        .expect("canal guardado");
+
+    let videos = [
+        ("v1", "2024-01-15T12:00:00Z"),
+        ("v2", "2024-02-10T12:00:00Z"),
+    ];
+    for (id, publicado_em) in videos {
+        repo.guardar_video(&Video {
+            id: VideoId::new(id),
+            canal_id: CanalId::new("canal-1"),
+            titulo: format!("Vídeo {id}"),
+            descricao: None,
+            url: format!("https://www.youtube.com/watch?v={id}"),
+            tags: Vec::new(),
+            topic_categories: Vec::new(),
+            publicado_em: publicado_em.to_owned(),
+            duracao_segundos: 600,
+            visualizacoes: 1_000,
+            curtidas: 100,
+            total_comentarios: 10,
+        })
+        .expect("vídeo guardado");
+    }
+
+    let comentarios = [
+        ("c1", "v1", Sentimento::Positivo, 0.8),
+        ("c2", "v1", Sentimento::Positivo, 0.4),
+        ("c3", "v2", Sentimento::Negativo, -0.2),
+    ];
+    for (id, video_id, sentimento, score) in comentarios {
+        repo.guardar_comentario(&Comentario {
+            id: ComentarioId::new(id),
+            video_id: VideoId::new(video_id),
+            autor: "Autor".to_owned(),
+            texto: "Comentário".to_owned(),
+            publicado_em: "2024-01-20T12:00:00Z".to_owned(),
+            curtidas: 0,
+            eh_resposta: false,
+            nivel_resposta: 0,
+            parent_id: None,
+        })
+        .expect("comentário guardado");
+        repo.guardar_sentimento(
+            &ComentarioId::new(id),
+            &ScoreSentimento::novo(sentimento, score),
+            VERSAO_MODELO_SENTIMENTO,
+        )
+        .expect("sentimento guardado");
+    }
+
+    let config = RelatorioConfig {
+        metricas: Vec::new(),
+        ..RelatorioConfig::default()
+    };
+    let relatorio = executar(Arc::clone(&repo), config, "canal-1")
+        .await
+        .expect("relatório gerado");
+    let serie = relatorio
+        .serie_sentimento
+        .as_deref()
+        .expect("série de sentimento");
+
+    assert_eq!(serie.len(), 2);
+    assert_eq!(
+        serie[0].0,
+        NaiveDate::from_ymd_opt(2024, 1, 1).expect("data válida")
+    );
+    assert!((serie[0].1 - 0.6).abs() < 1e-12);
+    assert!((serie[0].2 - 2.0).abs() < 1e-12);
+    assert_eq!(
+        serie[1].0,
+        NaiveDate::from_ymd_opt(2024, 2, 1).expect("data válida")
+    );
+
+    let markdown = para_markdown(&relatorio);
+    assert!(markdown.contains("## Análise de Sentimento"));
+    assert!(markdown.contains("O sentimento médio da comunidade é 0.33 (Positivo)."));
+    assert!(markdown.contains("| 2024-01 | 0.6000 | 2 |"));
+    assert!(markdown.contains("| 2024-02 | -0.2000 | 1 |"));
+    assert!(markdown.contains("CC-BY-4.0"));
+
+    let json = para_json(&relatorio).expect("JSON");
+    assert!(json.contains("\"serie_sentimento\""));
 }
 
 #[tokio::test]

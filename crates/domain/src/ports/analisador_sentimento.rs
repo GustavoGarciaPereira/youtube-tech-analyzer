@@ -2,6 +2,13 @@ use crate::errors::ErroDominio;
 use crate::ports::BoxFuture;
 use crate::value_objects::ScoreSentimento;
 
+/// Versão do modelo de sentimento usada por omissão.
+///
+/// A versão faz parte da chave de persistência (`comentarios_sentimento`) e
+/// da consulta do relatório. Mudar de modelo exige uma versão nova para não
+/// reutilizar análises feitas com outro modelo.
+pub const VERSAO_MODELO_SENTIMENTO: &str = "roberta-sentiment-int8-v1";
+
 /// Porta de saída para classificar o sentimento de um texto.
 ///
 /// A implementação concreta vive em infra-ai (ONNX Runtime + tokenizers) e é

@@ -3,11 +3,16 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use analysis::Direcao;
-use application::relatorio::export::{para_csv, para_json, para_markdown};
-use application::{
-    ColetaConfig, ColetarCanalUseCase, GerarRelatorioUseCase, MetadadosReproducao, ModoAnalise,
-    RelatorioCanal, RelatorioConfig, TendenciaMetrica,
+use application::relatorio::export::{
+    media_sentimento, para_csv, para_json, para_markdown, resumo_sentimento,
 };
+use application::{
+    AnalisarConfig, AnalisarSentimentosUseCase, ColetaConfig, ColetarCanalUseCase,
+    GerarRelatorioUseCase, MetadadosReproducao, ModoAnalise, RelatorioCanal, RelatorioConfig,
+    TendenciaMetrica,
+};
+use chrono::NaiveDate;
+use domain::ports::AnalisadorDeSentimento;
 use domain::{CanalId, CanalRef, CategoriaManual, Metrica};
 use eframe::egui;
 use egui::{Color32, RichText};
@@ -15,13 +20,25 @@ use egui_plot::{Legend, Line, Plot, Polygon};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-use crate::state::{AppState, Ecra, EstadoColeta, EstadoRelatorio, FormatoExport, ProgressoColeta};
+use crate::state::{
+    AcaoNlp, AppState, Ecra, EstadoColeta, EstadoRelatorio, EventoNlp, FormatoExport,
+    ProgressoColeta, acao_nlp,
+};
 use crate::wiring::Dependencias;
 
 const COR_ACCENT: Color32 = Color32::from_rgb(64, 120, 220);
 const COR_SUCESSO: Color32 = Color32::from_rgb(80, 190, 120);
 const COR_ERRO: Color32 = Color32::from_rgb(220, 90, 90);
 const COR_AVISO: Color32 = Color32::from_rgb(230, 190, 80);
+
+/// Estado do bloco de NLP apresentado no relatório.
+#[derive(Debug, Clone)]
+struct NlpUi {
+    modelo_pronto: bool,
+    em_progresso: bool,
+    progresso_msg: Option<String>,
+    pendentes: usize,
+}
 
 /// Aplicação desktop.
 pub struct DesktopApp {
@@ -47,6 +64,7 @@ impl DesktopApp {
         self.poll_add(ctx);
         self.poll_coleta(ctx);
         self.poll_relatorio(ctx);
+        self.poll_nlp(ctx);
     }
 
     fn poll_add(&mut self, ctx: &egui::Context) {
@@ -137,6 +155,7 @@ impl DesktopApp {
                         .first()
                         .map(|tendencia| tendencia.metrica);
                     self.state.relatorio = EstadoRelatorio::Pronto(Box::new(relatorio));
+                    self.state.refresh_nlp_pendentes();
                     self.state.toast("Relatório gerado");
                     ctx.request_repaint();
                 }
@@ -155,6 +174,62 @@ impl DesktopApp {
                 }
             },
             outro => self.state.relatorio = outro,
+        }
+    }
+
+    fn poll_nlp(&mut self, ctx: &egui::Context) {
+        let Some(mut rx) = self.state.nlp_rx.take() else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(evento)) => {
+                self.state.nlp_em_progresso = false;
+                self.state.nlp_progresso_msg = None;
+                match evento {
+                    EventoNlp::ModeloPronto => {
+                        self.state.nlp_modelo_pronto = true;
+                        self.state.refresh_nlp_pendentes();
+                        self.state.toast("Modelo NLP pronto");
+                    }
+                    EventoNlp::AnaliseConcluida {
+                        analisados,
+                        falhados,
+                        duracao_ms,
+                    } => {
+                        self.state.nlp_pendentes =
+                            self.state.nlp_pendentes.saturating_sub(analisados);
+                        self.state.refresh_nlp_pendentes();
+                        self.state.toast(format!(
+                            "Sentimentos: {analisados} analisados, {falhados} falhas em {:.1}s",
+                            duracao_ms as f64 / 1000.0
+                        ));
+                        // O relatório em curso pode ter começado antes de a
+                        // análise terminar; descartá-lo garante que a série
+                        // nova aparece no relatório final.
+                        if matches!(self.state.relatorio, EstadoRelatorio::EmGeracao { .. }) {
+                            self.state.relatorio = EstadoRelatorio::Ocioso;
+                        }
+                        self.iniciar_relatorio(ctx);
+                    }
+                }
+                ctx.request_repaint();
+            }
+            Ok(Err(erro)) => {
+                self.state.nlp_em_progresso = false;
+                self.state.nlp_progresso_msg = None;
+                self.state.toast(format!("NLP falhou: {erro}"));
+                ctx.request_repaint();
+            }
+            Err(mpsc::error::TryRecvError::Empty) => {
+                self.state.nlp_rx = Some(rx);
+                ctx.request_repaint_after(Duration::from_millis(100));
+            }
+            Err(mpsc::error::TryRecvError::Disconnected) => {
+                self.state.nlp_em_progresso = false;
+                self.state.nlp_progresso_msg = None;
+                self.state.toast("A tarefa de NLP terminou sem resultado");
+                ctx.request_repaint();
+            }
         }
     }
 
@@ -344,6 +419,86 @@ impl DesktopApp {
             let _ = tx.send(resultado).await;
         });
         ctx.request_repaint();
+    }
+
+    fn iniciar_download_modelo(&mut self, ctx: &egui::Context) {
+        if self.state.nlp_em_progresso {
+            self.state.toast("Já há uma tarefa de NLP em curso");
+            return;
+        }
+        let (tx, rx) = mpsc::channel(1);
+        self.state.nlp_rx = Some(rx);
+        self.state.nlp_em_progresso = true;
+        self.state.nlp_progresso_msg = Some("A descarregar modelo NLP (~143 MB)...".to_owned());
+
+        let ctx_tarefa = ctx.clone();
+        let rt = self.state.rt.clone();
+        ctx.request_repaint();
+        rt.spawn(async move {
+            let resultado = infra_nlp::ModelManager::novo()
+                .garantir_modelo_baixado()
+                .await
+                .map(|_| EventoNlp::ModeloPronto)
+                .map_err(|erro| erro.to_string());
+            let _ = tx.send(resultado).await;
+            ctx_tarefa.request_repaint();
+        });
+    }
+
+    fn iniciar_analise_sentimentos(&mut self, ctx: &egui::Context) {
+        if self.state.nlp_em_progresso {
+            self.state.toast("Já há uma tarefa de NLP em curso");
+            return;
+        }
+        if !self.state.nlp_modelo_pronto {
+            self.state.toast("O modelo NLP ainda não está descarregado");
+            return;
+        }
+        let Some(canal_id) = self.state.canal_selecionado.clone() else {
+            self.state.toast("Seleciona um canal primeiro");
+            return;
+        };
+        let pendentes = self.state.nlp_pendentes;
+
+        let (tx, rx) = mpsc::channel(1);
+        self.state.nlp_rx = Some(rx);
+        self.state.nlp_em_progresso = true;
+        self.state.nlp_progresso_msg = Some(format!(
+            "A analisar {pendentes} comentários (inferência local)..."
+        ));
+
+        let repositorio = Arc::clone(&self.state.deps.repositorio);
+        let ctx_tarefa = ctx.clone();
+        let rt = self.state.rt.clone();
+        ctx.request_repaint();
+        rt.spawn(async move {
+            let resultado = async {
+                let pasta = infra_nlp::ModelManager::novo().base().to_path_buf();
+                let analisador =
+                    tokio::task::spawn_blocking(move || infra_nlp::RobertaAnalisador::new(&pasta))
+                        .await
+                        .map_err(|erro| format!("tarefa de carregamento do modelo falhou: {erro}"))?
+                        .map_err(|erro| erro.to_string())?;
+                let analisador: Arc<dyn AnalisadorDeSentimento> = Arc::new(analisador);
+                let caso = AnalisarSentimentosUseCase::new(
+                    analisador,
+                    repositorio,
+                    AnalisarConfig::default(),
+                );
+                let relatorio = caso
+                    .executar(&canal_id)
+                    .await
+                    .map_err(|erro| erro.to_string())?;
+                Ok(EventoNlp::AnaliseConcluida {
+                    analisados: relatorio.analisados,
+                    falhados: relatorio.falhados,
+                    duracao_ms: u64::try_from(relatorio.duracao.as_millis()).unwrap_or(u64::MAX),
+                })
+            }
+            .await;
+            let _ = tx.send(resultado).await;
+            ctx_tarefa.request_repaint();
+        });
     }
 
     fn aplicar_categoria(&mut self, id: &CanalId, categoria: CategoriaManual, ctx: &egui::Context) {
@@ -568,6 +723,14 @@ impl DesktopApp {
         let mut periodo = self.state.periodo_dias;
         let mut modo = self.state.modo_analise;
         let mut escala_log = self.state.escala_log;
+        let nlp_ui = NlpUi {
+            modelo_pronto: self.state.nlp_modelo_pronto,
+            em_progresso: self.state.nlp_em_progresso,
+            progresso_msg: self.state.nlp_progresso_msg.clone(),
+            pendentes: self.state.nlp_pendentes,
+        };
+        let metrica_plot = self.state.metrica_plot;
+        let escala_log_plot = self.state.escala_log;
         let mut gerar = false;
         let mut copiar: Option<FormatoExport> = None;
 
@@ -702,14 +865,24 @@ impl DesktopApp {
             EstadoRelatorio::Pronto(relatorio) => {
                 // O relatório é mais alto que a janela; sem scroll a secção
                 // de diagnóstico e os avisos ficavam inalcançáveis.
-                egui::ScrollArea::vertical().show(ui, |ui| {
-                    render_relatorio(
-                        ui,
-                        relatorio.as_ref(),
-                        self.state.metrica_plot,
-                        self.state.escala_log,
-                    );
-                });
+                let acao = egui::ScrollArea::vertical()
+                    .show(ui, |ui| {
+                        render_relatorio(
+                            ui,
+                            relatorio.as_ref(),
+                            metrica_plot,
+                            escala_log_plot,
+                            &nlp_ui,
+                        )
+                    })
+                    .inner;
+                match acao {
+                    Some(AcaoNlp::BaixarModelo) => self.iniciar_download_modelo(ui.ctx()),
+                    Some(AcaoNlp::Analisar { .. }) => {
+                        self.iniciar_analise_sentimentos(ui.ctx());
+                    }
+                    None => {}
+                }
             }
         }
     }
@@ -895,7 +1068,8 @@ fn render_relatorio(
     relatorio: &RelatorioCanal,
     metrica: Option<Metrica>,
     escala_log: bool,
-) {
+    nlp: &NlpUi,
+) -> Option<AcaoNlp> {
     ui.label(RichText::new(formatar_sumario(relatorio)).size(16.0));
     ui.add_space(8.0);
 
@@ -906,6 +1080,9 @@ fn render_relatorio(
         render_plot(ui, tendencia, escala_log);
         ui.add_space(8.0);
     }
+
+    let acao = render_nlp_bloco(ui, relatorio, nlp);
+    ui.add_space(8.0);
 
     ui.heading("Tendências");
     egui::Grid::new("tendencias")
@@ -982,6 +1159,133 @@ fn render_relatorio(
             ui.colored_label(COR_AVISO, format!("• {aviso}"));
         }
     }
+
+    acao
+}
+
+fn render_nlp_bloco(ui: &mut egui::Ui, relatorio: &RelatorioCanal, nlp: &NlpUi) -> Option<AcaoNlp> {
+    ui.heading("Análise de Sentimento");
+    if nlp.em_progresso {
+        ui.horizontal(|ui| {
+            ui.add(egui::Spinner::new());
+            ui.label(
+                nlp.progresso_msg
+                    .as_deref()
+                    .unwrap_or("A processar pedidos de NLP..."),
+            );
+        });
+        ui.ctx().request_repaint_after(Duration::from_millis(100));
+    }
+
+    if let Some(serie) = relatorio
+        .serie_sentimento
+        .as_deref()
+        .filter(|serie| !serie.is_empty())
+    {
+        if let Some(resumo) = resumo_sentimento(serie) {
+            ui.label(resumo);
+        }
+        render_plot_sentimento(ui, serie);
+    } else {
+        ui.label("Ainda não há comentários analisados para este canal.");
+    }
+
+    let mut pedido = None;
+    if !nlp.em_progresso {
+        let acao = acao_nlp(nlp.modelo_pronto, nlp.em_progresso, nlp.pendentes);
+        if let Some(acao) = acao {
+            if ui.button(acao.rotulo()).clicked() {
+                pedido = Some(acao);
+            }
+        } else if nlp.modelo_pronto {
+            ui.label(RichText::new("Todos os comentários já têm sentimento.").weak());
+        }
+    }
+
+    ui.label(
+        RichText::new(
+            "Modelo: CardiffNLP twitter-roberta-base-sentiment-latest (Xenova, INT8, CC-BY-4.0). O processamento é local.",
+        )
+        .small()
+        .weak(),
+    );
+    pedido
+}
+
+fn render_plot_sentimento(ui: &mut egui::Ui, serie: &[(NaiveDate, f64, f64)]) {
+    ui.label(RichText::new("Evolução do Sentimento da Comunidade (Mensal)").strong());
+    if let Some(media) = media_sentimento(serie) {
+        ui.label(format!(
+            "Score médio ponderado: {media:.2} ({}).",
+            application::relatorio::export::classificacao_sentimento(media)
+        ));
+    }
+
+    let n = serie.len();
+    let max_contagem = serie
+        .iter()
+        .map(|(_, _, contagem)| *contagem)
+        .fold(0.0, f64::max);
+    let max_contagem = if max_contagem > 0.0 {
+        max_contagem
+    } else {
+        1.0
+    };
+    let datas: Vec<NaiveDate> = serie.iter().map(|(data, _, _)| *data).collect();
+    let x_final = n.saturating_sub(1) as f64;
+    let pontos: Vec<[f64; 2]> = serie
+        .iter()
+        .enumerate()
+        .map(|(indice, (_, score, _))| [indice as f64, score.clamp(-1.0, 1.0)])
+        .collect();
+
+    // A contagem não tem eixo próprio no egui_plot 0.29: é desenhada como
+    // área sombreada no fundo, com altura relativa ao máximo do período.
+    let mut area: Vec<[f64; 2]> = serie
+        .iter()
+        .enumerate()
+        .map(|(indice, (_, _, contagem))| [indice as f64, -1.0 + 0.3 * (contagem / max_contagem)])
+        .collect();
+    area.extend((0..n).rev().map(|indice| [indice as f64, -1.0]));
+
+    let plot = Plot::new("grafico-sentimento")
+        .legend(Legend::default())
+        .height(260.0)
+        .include_y(-1.0)
+        .include_y(1.0)
+        .x_axis_formatter(move |mark, _| {
+            let indice = mark.value.round();
+            if indice < 0.0 {
+                return String::new();
+            }
+            datas
+                .get(indice as usize)
+                .map(|data| data.format("%Y-%m").to_string())
+                .unwrap_or_default()
+        });
+
+    plot.show(ui, |plot_ui| {
+        if n >= 2 {
+            plot_ui.polygon(
+                Polygon::new(area)
+                    .name("N comentários (escala relativa)")
+                    .fill_color(Color32::from_rgba_unmultiplied(230, 190, 80, 35))
+                    .stroke(egui::Stroke::new(0.0_f32, Color32::TRANSPARENT)),
+            );
+        }
+        plot_ui.line(
+            Line::new(vec![[0.0, 0.0], [x_final, 0.0]])
+                .name("Neutro")
+                .color(Color32::GRAY)
+                .width(1.0_f32),
+        );
+        plot_ui.line(
+            Line::new(pontos)
+                .name("Score médio")
+                .color(COR_ACCENT)
+                .width(2.0_f32),
+        );
+    });
 }
 
 fn render_plot(ui: &mut egui::Ui, tendencia: &TendenciaMetrica, escala_log: bool) {
@@ -1166,6 +1470,7 @@ mod tests {
             tendencias,
             diagnostico_janelas: None,
             comparacoes: Vec::<ComparacaoPares>::new(),
+            serie_sentimento: None,
             avisos: Vec::new(),
             metadados: MetadadosReproducao {
                 hash_commit: "abc12345".to_owned(),

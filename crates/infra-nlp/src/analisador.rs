@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use domain::ports::{AnalisadorDeSentimento, BoxFuture};
-use domain::{ErroDominio, ScoreSentimento, Sentimento};
+use domain::{ErroDominio, ScoreSentimento, Sentimento, VERSAO_MODELO_SENTIMENTO};
 use ort::session::Session;
 use ort::value::Tensor;
 use tokenizers::{Tokenizer, TruncationParams};
@@ -12,7 +12,6 @@ use crate::erro::ErroNlp;
 const MAX_TOKENS: usize = 128;
 const ENTRADA_IDS: &str = "input_ids";
 const ENTRADA_MASCARA: &str = "attention_mask";
-const VERSAO_MODELO: &str = "roberta-sentiment-int8-v1";
 
 /// Analisador de sentimento baseado no RoBERTa da CardiffNLP (3 classes).
 ///
@@ -162,7 +161,7 @@ impl AnalisadorDeSentimento for RobertaAnalisador {
     }
 
     fn versao_modelo(&self) -> &str {
-        VERSAO_MODELO
+        VERSAO_MODELO_SENTIMENTO
     }
 }
 

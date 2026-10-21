@@ -166,6 +166,18 @@ o `hash_conteudo` tem de os incluir — senão há cache hits incorrectos.
 - Ctrl+R no ecrã Relatório regenera; exportações copiam para o clipboard.
 - O crate `desktop` tem múltiplos binários; usar sempre `--bin desktop` ou
   `--bin yta`.
+- NLP no relatório: `AppState.nlp_modelo_pronto` é calculado por
+  `ModelManager::modelo_pronto()` apenas com metadados de ficheiros (sem
+  carregar o `ort`). Download e análise correm em `tokio::spawn`, comunicam
+  por `nlp_rx` e são consumidos por `poll_nlp`; no fim do download ativa-se o
+  botão de análise e no fim da análise o relatório é regenerado.
+- `acao_nlp` é a função pura que decide entre "Baixar Modelo NLP" e
+  "Analisar Sentimentos (N pendentes)"; `contar_comentarios_sem_sentimento`
+  fornece o N sem carregar os textos.
+- O gráfico de sentimento usa `egui_plot` sem eixo secundário: a contagem de
+  comentários é uma área sombreada normalizada no fundo de [-1, 1] e a linha
+  a 0.0 marca o neutro. O título é "Evolução do Sentimento da Comunidade
+  (Mensal)".
 
 ## 16. Análise de sentimento (NLP)
 - Porta: `domain::ports::AnalisadorDeSentimento` (`analisar` + `versao_modelo`),
@@ -180,6 +192,12 @@ o `hash_conteudo` tem de os incluir — senão há cache hits incorrectos.
   como `falhados` e não abortam o lote; o comentário fica pendente.
 - `total_comentarios` no relatório = pendentes para a versão actual, não o
   total histórico do canal.
+- `VERSAO_MODELO_SENTIMENTO` vive em `domain` e é a fonte única para o
+  analisador e para a query do relatório. `RelatorioConfig` transporta-a.
+- O relatório preenche `serie_sentimento: Option<Vec<(NaiveDate, f64, f64)>>`
+  agrupando por `strftime('%Y-%m-01', v.publicado_em)`; o Markdown só imprime
+  a secção "Análise de Sentimento" quando há dados e inclui a atribuição
+  CC-BY-4.0 do modelo.
 - Ordem de classes do modelo: `[negativo, neutro, positivo]` (0/1/2). Validar
   com inferência real ao trocar de modelo.
 - Teste de inferência real está `#[ignore]`; o CI nunca descarrega o modelo.

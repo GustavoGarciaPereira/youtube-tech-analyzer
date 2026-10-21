@@ -1,6 +1,7 @@
 use std::fmt::Write as _;
 
 use analysis::Direcao;
+use chrono::NaiveDate;
 use domain::entities::snapshot::Metrica;
 
 use super::{ComparacaoPares, DiagnosticoJanela, ModoAnalise, RelatorioCanal, TendenciaMetrica};
@@ -88,6 +89,36 @@ pub fn para_markdown(relatorio: &RelatorioCanal) -> String {
         }
     }
     let _ = writeln!(saida);
+
+    if let Some(serie) = relatorio
+        .serie_sentimento
+        .as_deref()
+        .filter(|serie| !serie.is_empty())
+    {
+        let _ = writeln!(saida, "## Análise de Sentimento");
+        let _ = writeln!(saida);
+        if let Some(resumo) = resumo_sentimento(serie) {
+            let _ = writeln!(saida, "{resumo}");
+            let _ = writeln!(saida);
+        }
+        let _ = writeln!(saida, "| Data | Score Médio | Nº Comentários |");
+        let _ = writeln!(saida, "|---|---|---|");
+        for (data, score, total) in serie {
+            let _ = writeln!(
+                saida,
+                "| {} | {} | {:.0} |",
+                data.format("%Y-%m"),
+                formatar_numero(*score),
+                total
+            );
+        }
+        let _ = writeln!(saida);
+        let _ = writeln!(
+            saida,
+            "> Modelo: CardiffNLP `twitter-roberta-base-sentiment-latest` (Xenova, INT8, CC-BY-4.0). Score em [-1, 1] = P(positivo) − P(negativo)."
+        );
+        let _ = writeln!(saida);
+    }
 
     if let Some(janelas) = &relatorio.diagnostico_janelas {
         let _ = writeln!(saida, "## Diagnóstico de Robustez (views/dia)");
@@ -277,6 +308,44 @@ fn texto_sumario_publicacao(
         direcao_predominante(significativas),
         relatorio.nivel_significancia
     )
+}
+
+/// Média do sentimento ponderada pelo número de comentários de cada mês.
+#[must_use]
+pub fn media_sentimento(serie: &[(NaiveDate, f64, f64)]) -> Option<f64> {
+    let total: f64 = serie.iter().map(|(_, _, contagem)| *contagem).sum();
+    if !total.is_finite() || total <= 0.0 {
+        return None;
+    }
+    let soma: f64 = serie
+        .iter()
+        .map(|(_, score, contagem)| score * contagem)
+        .sum();
+    Some(soma / total)
+}
+
+/// Classificação textual do score médio.
+///
+/// A banda neutra evita chamar "positivo" a uma média residual de 0.01.
+#[must_use]
+pub fn classificacao_sentimento(score_medio: f64) -> &'static str {
+    if score_medio > 0.05 {
+        "Positivo"
+    } else if score_medio < -0.05 {
+        "Negativo"
+    } else {
+        "Neutro"
+    }
+}
+
+/// Frase de sumário da análise de sentimento, se houver dados.
+#[must_use]
+pub fn resumo_sentimento(serie: &[(NaiveDate, f64, f64)]) -> Option<String> {
+    let media = media_sentimento(serie)?;
+    Some(format!(
+        "O sentimento médio da comunidade é {media:.2} ({}).",
+        classificacao_sentimento(media)
+    ))
 }
 
 /// Formata coeficientes pequenos sem os reduzir a `0.0000`.

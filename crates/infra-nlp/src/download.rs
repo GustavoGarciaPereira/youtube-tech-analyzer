@@ -84,6 +84,18 @@ impl ModelManager {
         self.base.join("libonnxruntime.so")
     }
 
+    /// Verifica, sem carregar o ONNX Runtime, se os artefactos parecem prontos.
+    ///
+    /// A verificação é só de existência e tamanho mínimo; não valida o
+    /// conteúdo do modelo. Serve para a GUI decidir entre "Baixar" e
+    /// "Analisar" sem pagar o custo de inicializar o runtime.
+    #[must_use]
+    pub fn modelo_pronto(&self) -> bool {
+        ficheiro_utilizavel_sync(&self.caminho_modelo(), TAMANHO_MINIMO)
+            && ficheiro_utilizavel_sync(&self.caminho_tokenizer(), TAMANHO_MINIMO)
+            && ficheiro_utilizavel_sync(&self.caminho_runtime(), TAMANHO_MINIMO_RUNTIME)
+    }
+
     /// Garante que o modelo e o tokenizer estão no disco, descarregando o que faltar.
     ///
     /// Devolve a pasta que contém os dois ficheiros.
@@ -233,9 +245,49 @@ async fn ficheiro_utilizavel(caminho: &Path) -> bool {
     )
 }
 
+fn ficheiro_utilizavel_sync(caminho: &Path, tamanho_minimo: u64) -> bool {
+    matches!(
+        std::fs::metadata(caminho),
+        Ok(metadados) if metadados.is_file() && metadados.len() >= tamanho_minimo
+    )
+}
+
 #[cfg(test)]
 mod tests {
-    use super::extrair_runtime;
+    use super::{ModelManager, TAMANHO_MINIMO, TAMANHO_MINIMO_RUNTIME, extrair_runtime};
+
+    #[test]
+    fn modelo_pronto_exige_os_tres_artefactos() {
+        let pasta = tempfile::tempdir().expect("pasta temporária");
+        let base = pasta.path().join("modelo");
+        std::fs::create_dir_all(&base).expect("pasta do modelo");
+        let gestor = ModelManager::com_fontes(
+            base.clone(),
+            "http://exemplo/modelo",
+            "http://exemplo/tokenizer",
+        );
+
+        assert!(!gestor.modelo_pronto(), "pasta vazia não está pronta");
+
+        std::fs::write(gestor.caminho_modelo(), vec![0_u8; TAMANHO_MINIMO as usize])
+            .expect("modelo");
+        std::fs::write(
+            gestor.caminho_tokenizer(),
+            vec![0_u8; TAMANHO_MINIMO as usize],
+        )
+        .expect("tokenizer");
+        assert!(!gestor.modelo_pronto(), "runtime em falta");
+
+        std::fs::write(
+            gestor.caminho_runtime(),
+            vec![0_u8; TAMANHO_MINIMO_RUNTIME as usize],
+        )
+        .expect("runtime");
+        assert!(gestor.modelo_pronto(), "todos os artefactos presentes");
+
+        std::fs::remove_file(gestor.caminho_tokenizer()).expect("remover tokenizer");
+        assert!(!gestor.modelo_pronto(), "tokenizer em falta");
+    }
 
     #[test]
     fn extrai_o_runtime_do_tarball_oficial() {

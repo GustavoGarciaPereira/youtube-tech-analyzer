@@ -1,14 +1,14 @@
 // Módulo partilhado por vários testes; cada binário usa um subconjunto.
 #![allow(dead_code)]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
-use chrono::Utc;
+use chrono::{Datelike, NaiveDate, Utc};
 use domain::entities::{
     canal::Canal,
     comentario::Comentario,
@@ -460,6 +460,54 @@ impl RepositorioDeCanais for FakeRepositorio {
         Ok(comentarios)
     }
 
+    fn contar_comentarios_sem_sentimento(
+        &self,
+        canal_id: &CanalId,
+        versao_modelo: &str,
+    ) -> Result<usize, ErroDominio> {
+        Ok(self
+            .comentarios_sem_sentimento(canal_id, versao_modelo)?
+            .len())
+    }
+
+    fn obter_serie_sentimento(
+        &self,
+        canal_id: &CanalId,
+        versao_modelo: &str,
+    ) -> Result<Vec<(NaiveDate, f64, f64)>, ErroDominio> {
+        let estado = self.estado();
+        let mut grupos: BTreeMap<NaiveDate, (f64, usize)> = BTreeMap::new();
+
+        for ((comentario_id, versao), score) in &estado.sentimentos {
+            if versao != versao_modelo {
+                continue;
+            }
+            let Some(comentario) = estado.comentarios.get(comentario_id) else {
+                continue;
+            };
+            let Some(video) = estado.videos.get(&comentario.video_id) else {
+                continue;
+            };
+            if &video.canal_id != canal_id {
+                continue;
+            }
+            let Some(data) = parse_data_publicacao(&video.publicado_em) else {
+                continue;
+            };
+            let Some(mes) = data.with_day(1) else {
+                continue;
+            };
+            let entrada = grupos.entry(mes).or_insert((0.0, 0));
+            entrada.0 += score.score;
+            entrada.1 += 1;
+        }
+
+        Ok(grupos
+            .into_iter()
+            .map(|(mes, (soma, total))| (mes, soma / total as f64, total as f64))
+            .collect())
+    }
+
     fn guardar_snapshot(&self, snapshot: &Snapshot) -> Result<(), ErroDominio> {
         upsert_snapshot(&mut self.estado(), snapshot.clone());
         Ok(())
@@ -560,6 +608,16 @@ impl RepositorioDeCanais for FakeRepositorio {
         videos.sort_by(|a, b| a.publicado_em.cmp(&b.publicado_em));
         Ok(videos)
     }
+}
+
+fn parse_data_publicacao(valor: &str) -> Option<NaiveDate> {
+    NaiveDate::parse_from_str(valor, "%Y-%m-%d")
+        .ok()
+        .or_else(|| {
+            chrono::DateTime::parse_from_rfc3339(valor)
+                .ok()
+                .map(|data| data.date_naive())
+        })
 }
 
 fn upsert_snapshot(estado: &mut EstadoFake, snapshot: Snapshot) {

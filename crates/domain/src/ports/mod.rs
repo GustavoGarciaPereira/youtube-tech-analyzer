@@ -15,7 +15,7 @@ pub mod repositorio;
 /// Future boxed usado nas portas assíncronas object-safe.
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
-pub use analisador_sentimento::AnalisadorDeSentimento;
+pub use analisador_sentimento::{AnalisadorDeSentimento, VERSAO_MODELO_SENTIMENTO};
 pub use cache_classificacoes::CacheDeClassificacoes;
 pub use classificador::ClassificadorDeNicho;
 pub use coletor::ColetorDeCanal;

@@ -1,3 +1,5 @@
+use chrono::NaiveDate;
+
 use crate::entities::{
     canal::Canal, comentario::Comentario, nicho::ClassificacaoNicho, nicho::Nicho,
     snapshot::EntidadeTipo, snapshot::Metrica, snapshot::Snapshot, video::Video,
@@ -82,6 +84,28 @@ pub trait RepositorioDeCanais: Send + Sync {
         canal_id: &CanalId,
         versao_modelo: &str,
     ) -> Result<Vec<Comentario>, ErroDominio>;
+
+    /// Conta os comentários de um canal ainda sem análise para esta versão.
+    ///
+    /// É a versão leve de [`RepositorioDeCanais::comentarios_sem_sentimento`],
+    /// usada pela GUI para decidir o rótulo do botão sem carregar os textos.
+    fn contar_comentarios_sem_sentimento(
+        &self,
+        canal_id: &CanalId,
+        versao_modelo: &str,
+    ) -> Result<usize, ErroDominio>;
+
+    /// Série mensal do sentimento médio dos comentários de um canal.
+    ///
+    /// Cada elemento é `(mês, score_médio, número_de_comentários)`. O mês é o
+    /// primeiro dia do mês de `videos.publicado_em` (ex.: `2026-10-01`), porque
+    /// a análise faz mais sentido pela data de publicação do vídeo do que pela
+    /// data em que a inferência foi executada.
+    fn obter_serie_sentimento(
+        &self,
+        canal_id: &CanalId,
+        versao_modelo: &str,
+    ) -> Result<Vec<(NaiveDate, f64, f64)>, ErroDominio>;
 
     /// Regista uma observação de métrica.
     fn guardar_snapshot(&self, snapshot: &Snapshot) -> Result<(), ErroDominio>;

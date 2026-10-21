@@ -20,6 +20,6 @@ pub use errors::ErroDominio;
 pub use ids::{CanalId, ComentarioId, VideoId};
 pub use ports::{
     AnalisadorDeSentimento, BoxFuture, CacheDeClassificacoes, ClassificadorDeNicho, ColetorDeCanal,
-    RepositorioDeCanais,
+    RepositorioDeCanais, VERSAO_MODELO_SENTIMENTO,
 };
 pub use value_objects::{CategoriaManual, ScoreSentimento, Sentimento};

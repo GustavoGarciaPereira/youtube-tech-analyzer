@@ -104,6 +104,29 @@ WHERE v.canal_id = ?1 AND s.comentario_id IS NULL
 ORDER BY c.publicado_em ASC, c.id ASC
 "#;
 
+const COUNT_COMENTARIOS_SEM_SENTIMENTO: &str = r#"
+SELECT COUNT(*)
+FROM comentarios c
+JOIN videos v ON v.id = c.video_id
+LEFT JOIN comentarios_sentimento s
+       ON s.comentario_id = c.id AND s.versao_modelo = ?2
+WHERE v.canal_id = ?1 AND s.comentario_id IS NULL
+"#;
+
+const SELECT_SERIE_SENTIMENTO: &str = r#"
+SELECT strftime('%Y-%m-01', v.publicado_em) AS mes,
+       AVG(s.score) AS score_medio,
+       COUNT(*) AS total
+FROM comentarios_sentimento s
+JOIN comentarios c ON c.id = s.comentario_id
+JOIN videos v ON v.id = c.video_id
+WHERE v.canal_id = ?1
+  AND s.versao_modelo = ?2
+  AND strftime('%Y-%m-01', v.publicado_em) IS NOT NULL
+GROUP BY mes
+ORDER BY mes ASC
+"#;
+
 const INSERT_SNAPSHOT: &str = r#"
 INSERT INTO snapshots (
     entidade_tipo, entidade_id, metrica, valor, data_coleta
@@ -467,6 +490,45 @@ impl SqliteRepositorio {
         Ok(comentarios)
     }
 
+    fn contar_comentarios_sem_sentimento(
+        &self,
+        canal_id: &CanalId,
+        versao_modelo: &str,
+    ) -> Result<usize, Error> {
+        let conexao = self.obter_conexao()?;
+        let total: i64 = conexao.query_row(
+            COUNT_COMENTARIOS_SEM_SENTIMENTO,
+            params![canal_id.as_str(), versao_modelo],
+            |row| row.get(0),
+        )?;
+        usize::try_from(total)
+            .map_err(|_| Error::InvalidData(format!("contagem de pendentes inválida: {total}")))
+    }
+
+    fn buscar_serie_sentimento(
+        &self,
+        canal_id: &CanalId,
+        versao_modelo: &str,
+    ) -> Result<Vec<(chrono::NaiveDate, f64, f64)>, Error> {
+        let conexao = self.obter_conexao()?;
+        let mut stmt = conexao.prepare(SELECT_SERIE_SENTIMENTO)?;
+        let mut rows = stmt.query(params![canal_id.as_str(), versao_modelo])?;
+        let mut serie = Vec::new();
+        while let Some(row) = rows.next()? {
+            let mes: String = row.get(0)?;
+            let data = chrono::NaiveDate::parse_from_str(&mes, "%Y-%m-%d").map_err(|erro| {
+                Error::InvalidData(format!("mês de sentimento inválido '{mes}': {erro}"))
+            })?;
+            let score_medio: f64 = row.get(1)?;
+            let total: i64 = row.get(2)?;
+            let total = usize::try_from(total).map_err(|_| {
+                Error::InvalidData(format!("contagem de sentimentos inválida: {total}"))
+            })?;
+            serie.push((data, score_medio, total as f64));
+        }
+        Ok(serie)
+    }
+
     fn salvar_snapshot(&self, snapshot: &Snapshot) -> Result<(), Error> {
         let conexao = self.obter_conexao()?;
         inserir_snapshot(&conexao, snapshot)
@@ -733,6 +795,24 @@ impl RepositorioDeCanais for SqliteRepositorio {
         versao_modelo: &str,
     ) -> Result<Vec<Comentario>, ErroDominio> {
         self.buscar_comentarios_sem_sentimento(canal_id, versao_modelo)
+            .map_err(ErroDominio::from)
+    }
+
+    fn contar_comentarios_sem_sentimento(
+        &self,
+        canal_id: &CanalId,
+        versao_modelo: &str,
+    ) -> Result<usize, ErroDominio> {
+        self.contar_comentarios_sem_sentimento(canal_id, versao_modelo)
+            .map_err(ErroDominio::from)
+    }
+
+    fn obter_serie_sentimento(
+        &self,
+        canal_id: &CanalId,
+        versao_modelo: &str,
+    ) -> Result<Vec<(chrono::NaiveDate, f64, f64)>, ErroDominio> {
+        self.buscar_serie_sentimento(canal_id, versao_modelo)
             .map_err(ErroDominio::from)
     }
 

@@ -296,6 +296,10 @@ async fn gerar_relatorio(
     let comparacoes =
         construir_comparacoes(&repositorio, &canal.id, &tendencias, &config, &mut avisos)?;
 
+    let serie_sentimento =
+        repositorio.obter_serie_sentimento(&canal.id, &config.versao_modelo_sentimento)?;
+    let serie_sentimento = (!serie_sentimento.is_empty()).then_some(serie_sentimento);
+
     Ok(RelatorioCanal {
         canal,
         periodo_inicio,
@@ -304,6 +308,7 @@ async fn gerar_relatorio(
         tendencias,
         diagnostico_janelas,
         comparacoes,
+        serie_sentimento,
         avisos,
         metadados,
         nivel_significancia: config.nivel_significancia,
@@ -845,6 +850,7 @@ mod tests {
             tendencias: p_values.iter().map(|p| tendencia(*p)).collect(),
             diagnostico_janelas: None,
             comparacoes: Vec::new(),
+            serie_sentimento: None,
             avisos: Vec::new(),
             metadados: MetadadosReproducao {
                 hash_commit: "abc12345".to_owned(),

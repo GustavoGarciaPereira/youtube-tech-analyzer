@@ -155,6 +155,12 @@ pub struct RelatorioCanal {
     pub diagnostico_janelas: Option<Vec<DiagnosticoJanela>>,
     /// Comparações com canais pares.
     pub comparacoes: Vec<ComparacaoPares>,
+    /// Série mensal de sentimento: `(mês, score médio, nº de comentários)`.
+    ///
+    /// `None` quando não há comentários analisados para a versão do modelo
+    /// configurada. O mês é o primeiro dia do mês de publicação do vídeo.
+    #[serde(default)]
+    pub serie_sentimento: Option<Vec<(NaiveDate, f64, f64)>>,
     /// Avisos metodológicos.
     pub avisos: Vec<String>,
     /// Metadados de reprodutibilidade.
@@ -222,6 +228,8 @@ pub struct RelatorioConfig {
     /// Visualizações passam a views/dia desde a publicação; curtidas e
     /// comentários passam a rácio de engagement sobre as visualizações.
     pub views_por_dia: bool,
+    /// Versão do modelo de sentimento consultada no relatório.
+    pub versao_modelo_sentimento: String,
 }
 
 impl Default for RelatorioConfig {
@@ -239,6 +247,7 @@ impl Default for RelatorioConfig {
             modo: ModoAnalise::PorColeta,
             idade_minima_dias: 7,
             views_por_dia: true,
+            versao_modelo_sentimento: domain::VERSAO_MODELO_SENTIMENTO.to_owned(),
         }
     }
 }
